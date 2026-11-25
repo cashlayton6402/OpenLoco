@@ -7,6 +7,41 @@
     },
     "configurePresets": [
         {
+            "name": "ios-base",
+            "hidden": true,
+            "inherits": "posix-base",
+            "generator": "Xcode",
+            "cacheVariables": {
+                "CMAKE_SYSTEM_NAME": "iOS",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "17.0",
+                "CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED": "NO",
+                "CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED": "NO",
+                "OPENLOCO_USE_VCPKG": true,
+                "OPENLOCO_BUILD_TESTS": false,
+                "OPENLOCO_PARALLEL_PAINTING": false,
+                "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/triplets"
+            }
+        },
+        {
+            "name": "ios-device",
+            "displayName": "Unsigned iPad ARM64",
+            "inherits": "ios-base",
+            "cacheVariables": {
+                "CMAKE_OSX_SYSROOT": "iphoneos",
+                "VCPKG_TARGET_TRIPLET": "arm64-ios-openloco"
+            }
+        },
+        {
+            "name": "ios-simulator",
+            "displayName": "Unsigned iPad simulator ARM64",
+            "inherits": "ios-base",
+            "cacheVariables": {
+                "CMAKE_OSX_SYSROOT": "iphonesimulator",
+                "VCPKG_TARGET_TRIPLET": "arm64-ios-simulator-openloco"
+            }
+        },
+        {
             "name": "windows-base",
             "hidden": true,
             "binaryDir": "${sourceDir}/build/${presetName}",
@@ -242,6 +277,18 @@
         }
     ],
     "buildPresets": [
+        {
+            "name": "ios-device-release",
+            "configurePreset": "ios-device",
+            "configuration": "Release",
+            "targets": [ "App" ]
+        },
+        {
+            "name": "ios-simulator-release",
+            "configurePreset": "ios-simulator",
+            "configuration": "Release",
+            "targets": [ "App" ]
+        },
         {
             "name": "windows-debug",
             "configurePreset": "windows",

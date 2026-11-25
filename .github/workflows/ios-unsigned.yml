@@ -1,0 +1,71 @@
+name: iOS unsigned feasibility
+
+# Only the explicitly approved feasibility branch or a manual dispatch may run.
+# The branch trigger permits the first run without changing the default branch.
+on:
+  push:
+    branches: [ios/unsigned-feasibility]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Unsigned iOS ${{ matrix.target }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [device, simulator]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+      VCPKG_DISABLE_METRICS: 1
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/build/vcpkg-cache
+    steps:
+      - name: Checkout approved source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify Apple Silicon and selected Xcode
+        run: |
+          test "$(uname -m)" = arm64
+          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
+          xcodebuild -version
+          xcodebuild -showsdks
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+      - name: Restore dependency binary cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: ios-arm64-${{ matrix.target }}-xcode26.2-ios17-${{ hashFiles('CMakeLists.txt', 'distribution/ios/vcpkg.json', 'cmake/triplets/*ios*.cmake') }}
+      - name: Compile and inspect unsigned application
+        run: bash scripts/build-ios-unsigned.sh "${{ matrix.target }}"
+      - name: Launch setup and exercise cancel/retry in simulator
+        if: matrix.target == 'simulator'
+        run: bash scripts/smoke-ios-simulator.sh
+      - name: Upload unsigned application and dependency notices
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: OpenLoco-ios-${{ matrix.target }}-unsigned
+          path: build/ios-${{ matrix.target }}/artifacts/
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload build and simulator evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: OpenLoco-ios-${{ matrix.target }}-evidence
+          path: |
+            build/ios-${{ matrix.target }}/evidence/
+            build/ios-${{ matrix.target }}/CMakeFiles/CMakeConfigureLog.yaml
+            build/ios-${{ matrix.target }}/vcpkg-manifest-install.log
+          retention-days: 7
+          if-no-files-found: warn

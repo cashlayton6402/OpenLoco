@@ -23,7 +23,10 @@
 #include "World/StationManager.h"
 #include "World/TownManager.h"
 
+#include <algorithm>
+#if OPENLOCO_PARALLEL_PAINTING
 #include <execution>
+#endif
 
 using namespace OpenLoco::World;
 
@@ -184,7 +187,7 @@ namespace OpenLoco::Ui
             columns.push_back(columnRt);
         }
 
-        std::for_each(std::execution::par, columns.begin(), columns.end(), [&](const auto& columnRt) {
+        const auto renderColumn = [&](const auto& columnRt) {
             // TODO: This bypasses the interface currently, needs refactoring to create a new drawing context per thread.
             Gfx::SoftwareDrawingContext columnDrawingCtx;
             columnDrawingCtx.pushRenderTarget(columnRt);
@@ -213,7 +216,12 @@ namespace OpenLoco::Ui
 
             sess.drawStringStructs(columnDrawingCtx);
             drawRoutingNumbers(columnDrawingCtx, zoom);
-        });
+        };
+#if OPENLOCO_PARALLEL_PAINTING
+        std::for_each(std::execution::par, columns.begin(), columns.end(), renderColumn);
+#else
+        std::for_each(columns.begin(), columns.end(), renderColumn);
+#endif
     }
 
     // 0x004CA444

@@ -1,6 +1,8 @@
-set(private_files
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.cpp"
-)
+if (OPENLOCO_IOS)
+    set(private_files "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.Ios.mm")
+else()
+    set(private_files "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.cpp")
+endif()
 
 set(private_link_libraries
     OpenLoco
@@ -9,9 +11,9 @@ set(private_link_libraries
     $<$<BOOL:${MINGW}>:version>
 )
 
-set(private_compile_definitions
-    SDL_MAIN_HANDLED
-)
+if (NOT OPENLOCO_IOS)
+    set(private_compile_definitions SDL_MAIN_HANDLED)
+endif()
 
 loco_add_executable(App
     PRIVATE_FILES
@@ -24,7 +26,9 @@ loco_add_executable(App
 
 set_target_properties(App PROPERTIES OUTPUT_NAME OpenLoco)
 
-if (NOT APPLE)
+if (OPENLOCO_IOS)
+    include("${CMAKE_SOURCE_DIR}/cmake/OpenLocoIos.cmake")
+elseif (NOT APPLE)
     if (UNIX)
         set(DATADIR ${CMAKE_INSTALL_FULL_DATADIR}/openloco)
 

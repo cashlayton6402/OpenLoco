@@ -1,0 +1,12 @@
+{
+  "name": "openloco-ios",
+  "version-string": "26.09",
+  "builtin-baseline": "2fb57e1c4738d4b4484d2234c886caf006612222",
+  "dependencies": [
+    "fmt",
+    "libpng",
+    "yaml-cpp",
+    { "name": "sdl3", "default-features": false },
+    "openal-soft"
+  ]
+}

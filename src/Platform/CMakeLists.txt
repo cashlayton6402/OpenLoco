@@ -12,7 +12,12 @@ set(private_files
     "${CMAKE_CURRENT_SOURCE_DIR}/src/Platform.cpp"
 )
 
-if (APPLE)
+if (OPENLOCO_IOS)
+    list(REMOVE_ITEM private_files
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Platform.Macos.mm"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Platform.cpp")
+    list(APPEND private_files "${CMAKE_CURRENT_SOURCE_DIR}/src/Platform.Ios.mm")
+elseif (APPLE)
     set_source_files_properties(${private_files} PROPERTIES COMPILE_FLAGS "-x objective-c++")
 else()
     # Just want to keep the file in generated project but not compile it.
@@ -26,6 +31,10 @@ set(public_link_libraries
     Utility
     SDL3::SDL3
 )
+
+if (OPENLOCO_IOS)
+    list(APPEND public_link_libraries "-framework Foundation")
+endif()
 
 if (MSVC)
     list(APPEND public_link_libraries ${BREAKPAD_LIBRARIES})

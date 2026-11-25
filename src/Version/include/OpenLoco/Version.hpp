@@ -2,6 +2,10 @@
 
 #include <string>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 // clang-format off
 
 #define OPENLOCO_NAME "OpenLoco"
@@ -34,6 +38,8 @@
     #define OPENLOCO_PLATFORM "Windows"
 #elif defined(__linux__) && !defined(__ANDROID__)
     #define OPENLOCO_PLATFORM "Linux"
+#elif defined(__APPLE__) && TARGET_OS_IOS
+    #define OPENLOCO_PLATFORM "iOS"
 #elif (defined(__APPLE__) && defined(__MACH__))
     #define OPENLOCO_PLATFORM "macOS"
 #elif defined(__FreeBSD__)

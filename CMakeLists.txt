@@ -28,6 +28,16 @@ endif (CCache_FOUND)
 
 include(FetchContent)
 
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(OPENLOCO_IOS ON)
+    # Set before project()/vcpkg: the device only needs runtime dependencies.
+    set(VCPKG_MANIFEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/distribution/ios")
+    set(OPENLOCO_BUILD_TESTS_DEFAULT NO)
+else()
+    set(OPENLOCO_IOS OFF)
+    set(OPENLOCO_BUILD_TESTS_DEFAULT YES)
+endif()
+
 if (WIN32)
     set(OPENLOCO_USE_VCPKG_DEFAULT YES)
 else()
@@ -58,11 +68,19 @@ endif ()
 
 project(${PROJECT} LANGUAGES CXX VERSION 26.09)
 
+if (OPENLOCO_IOS)
+    enable_language(OBJCXX)
+endif()
+
 # Enable IPO for all Release targets by default
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
 
-if(ipo_supported)
+if(OPENLOCO_IOS)
+    # Keep every forced-in core object visible to the unsigned link verification.
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE FALSE)
+    message(STATUS "IPO/LTO disabled for the iOS feasibility target.")
+elseif(ipo_supported)
     # Enable IPO globally for all Release builds
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
     message(STATUS "IPO/LTO enabled for all Release targets.")
@@ -86,6 +104,11 @@ if (NOT CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_STANDARD 20)
 endif()
 
+if (OPENLOCO_IOS)
+    set(CMAKE_OBJCXX_STANDARD ${CMAKE_CXX_STANDARD})
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+endif()
+
 if (CMAKE_BINARY_DIR STREQUAL CMAKE_SOURCE_DIR)
     message(FATAL_ERROR "Building in-source is not supported! Create a build dir and remove ${CMAKE_SOURCE_DIR}/CMakeCache.txt")
 endif()
@@ -98,10 +121,16 @@ include(OpenLocoCommon)
 include(OpenLocoUtility)
 
 option(STRICT "Build with warnings as errors" YES)
-option(OPENLOCO_BUILD_TESTS "Build tests" YES)
+option(OPENLOCO_BUILD_TESTS "Build tests" ${OPENLOCO_BUILD_TESTS_DEFAULT})
 option(OPENLOCO_HEADER_CHECK "Verify all public interfaces are standalone" NO)
 
-if (APPLE)
+if (OPENLOCO_IOS)
+    option(OPENLOCO_PARALLEL_PAINTING "Use parallel viewport painting" OFF)
+else()
+    option(OPENLOCO_PARALLEL_PAINTING "Use parallel viewport painting" ON)
+endif()
+
+if (APPLE AND OPENLOCO_PARALLEL_PAINTING)
     # Enable the use of e.g. std::execution::par
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexperimental-library")
 endif ()

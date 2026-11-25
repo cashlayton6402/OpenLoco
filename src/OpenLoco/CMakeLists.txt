@@ -789,3 +789,6 @@ loco_add_library(OpenLoco STATIC
 )
 
 target_include_directories(OpenLoco PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/OpenLoco")
+
+target_compile_definitions(OpenLoco PRIVATE
+    OPENLOCO_PARALLEL_PAINTING=$<BOOL:${OPENLOCO_PARALLEL_PAINTING}>)
