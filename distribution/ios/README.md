@@ -10,7 +10,7 @@ on a stock iPad.
 
 Install/select Xcode with its iOS platform and an available simulator runtime,
 CMake 3.22+, Ninja and Git. The unsigned workflow selects Xcode 26.2
-on `macos-15` and fails clearly if that image/toolchain is unavailable.
+on the standard `macos-26` runner and fails clearly if that image/toolchain is unavailable.
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode_26.2.app/Contents/Developer
