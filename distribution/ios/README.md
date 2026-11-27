@@ -57,7 +57,9 @@ packaging. This stages notices inside the app and checks the resource inventory
 against the source checkout and installed dependency notices. The setup smoke
 check also requires Metal presentation, a landscape UIKit scene filled by both
 the window and setup view, and a raw landscape screenshot whose pixel dimensions
-match the drawable. UIKit gets up to ten seconds to settle before dialog checks.
+match the drawable. The setup test waits for an active scene and UIKit's actual
+presentation/dismissal completions before each action. Each stage has a 15-second
+deadline, with a 90-second overall bound after setup initialization.
 The scene manifest uses SDL3's built-in scene delegate; the app requests landscape
 through the public scene geometry API and sets SDL's orientation hint before
 initializing video. Setup view edges follow the root view using constraints.
@@ -78,6 +80,10 @@ The portable audit checks use synthetic resources and can run on Windows/Linux:
 cmake -DTEST_ROOT=/absolute/disposable/test-directory -P scripts/tests/test-ios-bundle-audit.cmake
 bash scripts/tests/test-ios-build-selection.sh
 python3 scripts/tests/test-ios-evidence.py
+cmake -S scripts/tests/ios-smoke -B /absolute/disposable/sequence-build
+cmake --build /absolute/disposable/sequence-build --config Release
+ctest --test-dir /absolute/disposable/sequence-build -C Release --output-on-failure
+python3 scripts/tests/test-ios-simulator-script.py
 ```
 
 See [the OpenRCT2 comparison](OPENRCT2-COMPARISON.md) for the pinned references,
@@ -102,6 +108,26 @@ cancel/retry handlers on separate run-loop turns. It emits a JSON result and a
 simulator screenshot. It is not a gesture/playability test, XCTest tap test,
 asset-format validation or physical-device test. Import cancellation/invalid
 game-data tests must be added with the actual importer in M6.
+
+The transition sequence is shared with portable C++ regression tests. A button
+is dispatched once, then the test waits for its alert's presentation completion;
+the next button waits for dismissal completion and an active scene. It requires
+two completed presentations, two dismissals, three checks and one cancellation.
+Version 2 result JSON records the stage, reason, counts, pending transition and
+scene geometry. Controlled failures keep the app visible for evidence and still
+fail the external validator; ordinary application exit attempts a failed result
+before teardown. Initialization failures before app-state ownership and OS kills
+may provide only console evidence. Progress JSON is written at stage boundaries.
+
+The external script allows 180 seconds for cold Metal startup plus the bounded
+app test. It records startup phases and simulator identity, collects progress,
+result, screenshot and console before cleanup on success or failure, and preserves
+the original command/validation exit status. Cleanup affects only the simulator
+created by this invocation. Portable script tests use synthetic tools/PNG headers,
+including launch/screenshot failures and a missing result; they do not boot iOS.
+See Apple's [presentation completion](https://developer.apple.com/documentation/uikit/uiviewcontroller/present(_:animated:completion:))
+and [dismissal completion](https://developer.apple.com/documentation/uikit/uiviewcontroller/dismiss(animated:completion:))
+documentation for the readiness signals.
 
 Language/OpenGraphics objects and license notices are bundled; original game
 files are not. The resource directory is read-only; app-owned files use

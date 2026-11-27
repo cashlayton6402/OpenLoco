@@ -15,7 +15,9 @@ def require(condition, message):
 
 
 def verify_smoke(result, screenshot):
-    require(result.get("passed") is True, "App reported a failed smoke check")
+    require(result.get("passed") is True, f"App smoke failed: stage={result.get('stage', 'missing')}; reason={result.get('failureReason', 'missing')}")
+    require(result.get("resultVersion") == 2 and result.get("stage") == "complete" and result.get("failureReason") == "", "Missing completed transition evidence")
+    require(result.get("dialogsDismissed") == 2 and result.get("presentationPending") is False and result.get("activeDialog") is False, "Dialog transitions did not finish")
     require(result.get("gameplayStarted") is False, "Unexpected gameplay startup")
     require(result.get("frames", 0) > 1, "No sustained presentation")
     require((result.get("checks"), result.get("cancellations"), result.get("dialogsPresented")) == (3, 1, 2), "Setup actions failed")

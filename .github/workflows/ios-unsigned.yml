@@ -29,6 +29,13 @@ jobs:
         run: bash scripts/tests/test-ios-build-selection.sh
       - name: Reject mismatched symbols and letterboxed screen evidence
         run: python3 scripts/tests/test-ios-evidence.py
+      - name: Exercise delayed setup-dialog transitions
+        run: |
+          cmake -S scripts/tests/ios-smoke -B "$RUNNER_TEMP/openloco-ios-smoke"
+          cmake --build "$RUNNER_TEMP/openloco-ios-smoke"
+          ctest --test-dir "$RUNNER_TEMP/openloco-ios-smoke" --output-on-failure
+      - name: Verify simulator script failure evidence and exit codes
+        run: python3 scripts/tests/test-ios-simulator-script.py
 
   build:
     name: Unsigned iOS ${{ matrix.target }} (${{ matrix.architecture }})

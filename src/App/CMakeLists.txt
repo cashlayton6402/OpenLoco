@@ -1,5 +1,7 @@
 if (OPENLOCO_IOS)
-    set(private_files "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.Ios.mm")
+    set(private_files
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.Ios.mm"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/IosSetupSmoke.h")
 else()
     set(private_files "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.cpp")
 endif()

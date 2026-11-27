@@ -22,7 +22,9 @@ class EvidenceTests(unittest.TestCase):
         self.screenshot = self.root / "screen.png"
         # Only a PNG header: fixture for metadata validation, not a rendered image.
         self.png_size(2420, 1668)
-        self.result = dict(passed=True, gameplayStarted=False, frames=151, checks=3,
+        self.result = dict(resultVersion=2, stage="complete", failureReason="",
+                           dialogsDismissed=2, presentationPending=False, activeDialog=False,
+                           passed=True, gameplayStarted=False, frames=151, checks=3,
                            cancellations=1, dialogsPresented=2, metalRenderer=True,
                            landscapeFillsScene=True, pixelWidth=2420, pixelHeight=1668,
                            sceneWidth=1210, sceneHeight=834, windowWidth=1210,
@@ -69,6 +71,22 @@ class EvidenceTests(unittest.TestCase):
     def test_missing_geometry(self):
         del self.result["landscapeFillsScene"]
         with self.assertRaises(ValueError):
+            self.smoke()
+
+    def test_incomplete_transitions(self):
+        for key, value in (("stage", "wait-for-cancel-dismissal"), ("failureReason", "transition-timeout"),
+                           ("dialogsDismissed", 1), ("presentationPending", True),
+                           ("activeDialog", True), ("resultVersion", 1)):
+            with self.subTest(key=key):
+                original = self.result.copy()
+                self.result[key] = value
+                with self.assertRaises(ValueError):
+                    self.smoke()
+                self.result = original
+
+    def test_failure_reports_stage_and_reason(self):
+        self.result.update(passed=False, stage="wait-for-second-dialog", failureReason="transition-timeout")
+        with self.assertRaisesRegex(ValueError, "wait-for-second-dialog.*transition-timeout"):
             self.smoke()
 
     def test_stretched_drawable(self):

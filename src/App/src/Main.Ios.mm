@@ -1,3 +1,4 @@
+#include "IosSetupSmoke.h"
 #include <OpenLoco/Platform/Platform.h>
 #include <OpenLoco/Version.hpp>
 #include <SDL3/SDL.h>
@@ -15,9 +16,14 @@
 @property (nonatomic, strong) UIButton* checkButton;
 @property (nonatomic) NSUInteger checks;
 @property (nonatomic) NSUInteger cancellations;
+@property (nonatomic, strong) UIAlertController* activeAlert;
+@property (nonatomic) BOOL dialogTransitionPending;
+@property (nonatomic) NSUInteger dialogsPresented;
+@property (nonatomic) NSUInteger dialogsDismissed;
 - (void)checkGameData;
 - (void)cancelCheck;
 - (void)retryCheck;
+- (void)dismissGameData;
 @end
 
 @implementation OpenLocoSetupController
@@ -75,7 +81,7 @@
 
 - (void)checkGameData
 {
-    if (self.presentedViewController != nil)
+    if (self.activeAlert != nil || self.dialogTransitionPending || self.presentedViewController != nil || self.view.window == nil)
     {
         return;
     }
@@ -96,20 +102,57 @@
                                             handler:^(UIAlertAction*) {
                                                 [weakSelf retryCheck];
                                             }]];
-    [self presentViewController:alert animated:NO completion:nil];
+    self.activeAlert = alert;
+    self.dialogTransitionPending = YES;
+    [self presentViewController:alert
+                       animated:NO
+                     completion:^{
+                         OpenLocoSetupController* strongSelf = weakSelf;
+                         if (strongSelf != nil)
+                         {
+                             strongSelf.dialogsPresented++;
+                             strongSelf.dialogTransitionPending = NO;
+                         }
+                     }];
 }
 
 - (void)cancelCheck
 {
+    if (self.activeAlert == nil || self.dialogTransitionPending)
+    {
+        return;
+    }
     self.cancellations++;
-    [self dismissViewControllerAnimated:NO completion:nil];
+    [self dismissGameData];
 }
 
 - (void)retryCheck
 {
+    if (self.activeAlert == nil || self.dialogTransitionPending)
+    {
+        return;
+    }
     self.checks++;
     self.statusLabel.text = @"Game data import is not available in this build.";
-    [self dismissViewControllerAnimated:NO completion:nil];
+    [self dismissGameData];
+}
+
+- (void)dismissGameData
+{
+    // Keep the alert until UIKit confirms dismissal, even if its presenting
+    // controller's property has already cleared during the transition.
+    self.dialogTransitionPending = YES;
+    __weak OpenLocoSetupController* weakSelf = self;
+    [self.activeAlert dismissViewControllerAnimated:NO
+                                         completion:^{
+                                             OpenLocoSetupController* strongSelf = weakSelf;
+                                             if (strongSelf != nil)
+                                             {
+                                                 strongSelf.activeAlert = nil;
+                                                 strongSelf.dialogsDismissed++;
+                                                 strongSelf.dialogTransitionPending = NO;
+                                             }
+                                         }];
 }
 @end
 
@@ -121,10 +164,9 @@ namespace
         SDL_Renderer* renderer = nullptr;
         OpenLocoSetupController* setup = nil;
         uint64_t started = 0;
-        uint64_t smokeNextStep = 0;
         uint64_t frames = 0;
-        int smokeStage = 0;
-        int smokeDialogs = 0;
+        OpenLoco::Ios::SetupSmoke smoke;
+        bool smokeResultWritten = false;
         bool smokeTest = false;
         bool background = false;
     };
@@ -148,28 +190,38 @@ namespace
             && matches(windowFrame, sceneBounds) && matches(setupFrame, window.bounds);
     }
 
-    bool writeSmokeResult(const AppState& app)
+    bool writeSmokeResult(AppState& app, bool final = true)
     {
-        const auto* rendererName = SDL_GetRendererName(app.renderer);
+        const auto* rendererName = app.renderer != nullptr ? SDL_GetRendererName(app.renderer) : nullptr;
         const bool metal = rendererName != nullptr && std::string_view(rendererName) == "metal";
         int pixelWidth = 0;
         int pixelHeight = 0;
-        const bool drawable = SDL_GetRenderOutputSize(app.renderer, &pixelWidth, &pixelHeight) && pixelWidth > 0 && pixelHeight > 0;
+        const bool drawable = app.renderer != nullptr && SDL_GetRenderOutputSize(app.renderer, &pixelWidth, &pixelHeight) && pixelWidth > 0 && pixelHeight > 0;
         UIWindow* window = app.setup.view.window;
         const CGSize sceneSize = window.windowScene.coordinateSpace.bounds.size;
         const CGSize windowSize = window.bounds.size;
         const CGSize setupSize = app.setup.view.bounds.size;
         const bool fillsScene = landscapeFillsScene(app);
-        const bool passed = metal && drawable && fillsScene && pixelWidth > pixelHeight && app.frames > 1 && app.smokeDialogs == 2 && app.setup.checks == 3 && app.setup.cancellations == 1 && app.setup.presentedViewController == nil;
-        const auto path = OpenLoco::Platform::getUserDirectory() / "ios-smoke-result.json";
+        const bool passed = final && app.smoke.complete() && !app.smoke.failed() && metal && drawable && fillsScene && pixelWidth > pixelHeight && app.frames > 1 && app.setup.dialogsPresented == 2 && app.setup.dialogsDismissed == 2 && app.setup.checks == 3 && app.setup.cancellations == 1 && app.setup.activeAlert == nil && !app.setup.dialogTransitionPending && app.setup.presentedViewController == nil;
+        if (final && !passed && !app.smoke.failed())
+        {
+            app.smoke.fail("final-verification-failed");
+        }
+        const auto path = OpenLoco::Platform::getUserDirectory() / (final ? "ios-smoke-result.json" : "ios-smoke-progress.json");
         auto stagingPath = path;
         stagingPath += ".tmp";
         std::ofstream result(stagingPath);
-        result << "{\"passed\":" << (passed ? "true" : "false")
+        result << "{\"resultVersion\":2,\"passed\":" << (passed ? "true" : "false")
+               << ",\"stage\":\"" << app.smoke.stageName() << "\""
+               << ",\"failureReason\":\"" << app.smoke.failureReason() << "\""
+               << ",\"elapsedMs\":" << SDL_GetTicks() - app.started
                << ",\"frames\":" << app.frames
                << ",\"checks\":" << app.setup.checks
                << ",\"cancellations\":" << app.setup.cancellations
-               << ",\"dialogsPresented\":" << app.smokeDialogs
+               << ",\"dialogsPresented\":" << app.setup.dialogsPresented
+               << ",\"dialogsDismissed\":" << app.setup.dialogsDismissed
+               << ",\"presentationPending\":" << (app.setup.dialogTransitionPending ? "true" : "false")
+               << ",\"activeDialog\":" << (app.setup.activeAlert != nil ? "true" : "false")
                << ",\"metalRenderer\":" << (metal ? "true" : "false")
                << ",\"pixelWidth\":" << pixelWidth
                << ",\"pixelHeight\":" << pixelHeight
@@ -181,11 +233,17 @@ namespace
         result.close();
         if (!result.good())
         {
+            SDL_Log("Could not write smoke evidence: %s", path.string().c_str());
             return false;
         }
         std::error_code error;
         fs::rename(stagingPath, path, error);
-        return passed && !error;
+        if (error)
+        {
+            SDL_Log("Could not publish smoke evidence: %s", error.message().c_str());
+        }
+        app.smokeResultWritten |= final && !error;
+        return !error;
     }
 }
 
@@ -249,7 +307,11 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
                                                     SDL_Log("Landscape geometry request failed: %s", error.localizedDescription.UTF8String);
                                                 }];
     state.started = SDL_GetTicks();
-    state.smokeNextStep = state.started + 1000;
+    state.smoke = OpenLoco::Ios::SetupSmoke(state.started);
+    if (state.smokeTest)
+    {
+        writeSmokeResult(state, false);
+    }
     SDL_Log("OpenLoco iOS setup ready; renderer=%s; core=%s", SDL_GetRendererName(state.renderer), OpenLoco::Version::kVersion);
     return SDL_APP_CONTINUE;
 }
@@ -275,6 +337,12 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 SDL_AppResult SDL_AppIterate(void* appstate)
 {
     auto& app = *static_cast<AppState*>(appstate);
+    // Keep the final app/dialog visible until the external checker captures it.
+    // A failed JSON result still makes the external checker fail.
+    if (app.smokeTest && app.smokeResultWritten)
+    {
+        return SDL_APP_CONTINUE;
+    }
     if (app.background)
     {
         return SDL_APP_CONTINUE;
@@ -283,55 +351,55 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     if (!SDL_RenderClear(app.renderer) || !SDL_RenderPresent(app.renderer))
     {
         SDL_Log("Presentation failed: %s", SDL_GetError());
+        if (app.smokeTest)
+        {
+            app.smoke.fail("render-presentation-failed");
+            if (writeSmokeResult(app))
+            {
+                return SDL_APP_CONTINUE;
+            }
+        }
         return SDL_APP_FAILURE;
     }
     app.frames++;
 
     // Exercise the actual setup action handlers across separate UIKit run-loop turns.
     // This is a smoke check, not a substitute for XCTest taps or real device tests.
-    if (app.smokeTest && app.smokeStage <= 4 && SDL_GetTicks() >= app.smokeNextStep)
+    if (app.smokeTest)
     {
-        // UIKit rotation is asynchronous. Allow it to settle before exercising
-        // dialogs, but report a failed result if the scene never fills correctly.
-        if (app.smokeStage == 0 && !landscapeFillsScene(app))
+        using Smoke = OpenLoco::Ios::SetupSmoke;
+        UIWindow* window = app.setup.view.window;
+        UIAlertController* alert = app.setup.activeAlert;
+        const Smoke::Observation ui{
+            .sceneReady = landscapeFillsScene(app) && window.windowScene.activationState == UISceneActivationStateForegroundActive && window.rootViewController.transitionCoordinator == nil,
+            .dialogReady = alert != nil && !app.setup.dialogTransitionPending && alert.viewIfLoaded.window != nil && !alert.isBeingPresented && !alert.isBeingDismissed,
+            .dialogIdle = alert == nil && !app.setup.dialogTransitionPending && app.setup.presentedViewController == nil,
+            .checks = app.setup.checks,
+            .cancellations = app.setup.cancellations,
+            .presentations = app.setup.dialogsPresented,
+            .dismissals = app.setup.dialogsDismissed,
+        };
+        const auto previous = app.smoke.stage();
+        const auto action = app.smoke.update(SDL_GetTicks(), ui);
+        switch (action)
         {
-            if (SDL_GetTicks() - app.started < 10000)
-            {
-                return SDL_APP_CONTINUE;
-            }
-            writeSmokeResult(app);
-            SDL_Log("Landscape scene did not settle within 10 seconds.");
-            return SDL_APP_FAILURE;
+            case Smoke::Action::openDialog: [app.setup.checkButton sendActionsForControlEvents:UIControlEventTouchUpInside]; break;
+            case Smoke::Action::cancelDialog: [app.setup cancelCheck]; break;
+            case Smoke::Action::retryDialog: [app.setup retryCheck]; break;
+            default: break;
         }
-        app.smokeNextStep = SDL_GetTicks() + 700;
-        switch (app.smokeStage++)
+        if (previous != app.smoke.stage() || action == Smoke::Action::failure)
         {
-            case 0: [app.setup.checkButton sendActionsForControlEvents:UIControlEventTouchUpInside]; break;
-            case 1:
-                if (![app.setup.presentedViewController isKindOfClass:UIAlertController.class])
-                {
-                    return SDL_APP_FAILURE;
-                }
-                app.smokeDialogs++;
-                [app.setup cancelCheck];
-                break;
-            case 2: [app.setup.checkButton sendActionsForControlEvents:UIControlEventTouchUpInside]; break;
-            case 3:
-                if (![app.setup.presentedViewController isKindOfClass:UIAlertController.class])
-                {
-                    return SDL_APP_FAILURE;
-                }
-                app.smokeDialogs++;
-                [app.setup retryCheck];
-                break;
-            case 4:
-                if (!writeSmokeResult(app))
-                {
-                    SDL_Log("OpenLoco iOS setup smoke check failed.");
-                    return SDL_APP_FAILURE;
-                }
-                SDL_Log("OpenLoco iOS setup smoke check passed.");
-                break;
+            SDL_Log("Setup smoke stage=%s; reason=%s; checks=%lu; presentations=%lu; dismissals=%lu; pending=%d", app.smoke.stageName(), app.smoke.failureReason(), static_cast<unsigned long>(app.setup.checks), static_cast<unsigned long>(app.setup.dialogsPresented), static_cast<unsigned long>(app.setup.dialogsDismissed), app.setup.dialogTransitionPending);
+            writeSmokeResult(app, false);
+        }
+        if (action == Smoke::Action::success || action == Smoke::Action::failure)
+        {
+            if (!writeSmokeResult(app))
+            {
+                return SDL_APP_FAILURE;
+            }
+            SDL_Log("OpenLoco iOS setup smoke check %s.", app.smoke.failed() ? "failed" : "passed");
         }
     }
     return SDL_APP_CONTINUE;
@@ -342,6 +410,11 @@ void SDL_AppQuit(void* appstate, SDL_AppResult)
     std::unique_ptr<AppState> app(static_cast<AppState*>(appstate));
     if (app)
     {
+        if (app->smokeTest && !app->smokeResultWritten)
+        {
+            app->smoke.fail("application-exited-before-smoke-completion");
+            writeSmokeResult(*app);
+        }
         [app->setup willMoveToParentViewController:nil];
         [app->setup.view removeFromSuperview];
         [app->setup removeFromParentViewController];
