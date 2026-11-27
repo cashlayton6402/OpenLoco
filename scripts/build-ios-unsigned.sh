@@ -58,7 +58,7 @@ app="$(find "$root/build/$preset" -type d -name OpenLoco.app -not -path '*_deps*
 [[ -n "$app" && -x "$app/OpenLoco" ]] || { echo "Built app bundle not found" >&2; exit 1; }
 plutil -lint "$app/Info.plist"
 file "$app/OpenLoco" | tee "$evidence/binary.txt"
-xcrun lipo -verify_arch "$ios_arch" "$app/OpenLoco"
+xcrun lipo "$app/OpenLoco" -verify_arch "$ios_arch"
 xcrun vtool -show-build "$app/OpenLoco" | tee "$evidence/platform.txt"
 otool -L "$app/OpenLoco" | tee "$evidence/linked-libraries.txt"
 if grep -Eq 'Cocoa|AppKit|/opt/homebrew|/usr/local/|libclang_rt.*osx' "$evidence/linked-libraries.txt"; then

@@ -7,7 +7,7 @@ build="$root/build/$ios_preset"
 evidence="$build/evidence"
 mkdir -p "$evidence"
 app="$(cat "$evidence/app-path.txt")"
-xcrun lipo -verify_arch "$ios_arch" "$app/OpenLoco"
+xcrun lipo "$app/OpenLoco" -verify_arch "$ios_arch"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
 
 # Choose an available runtime/device type explicitly; do not depend on a booted
