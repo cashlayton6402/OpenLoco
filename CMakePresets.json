@@ -42,6 +42,15 @@
             }
         },
         {
+            "name": "ios-simulator-intel",
+            "displayName": "Unsigned iPad simulator x86-64 (Intel Mac)",
+            "inherits": "ios-simulator",
+            "cacheVariables": {
+                "CMAKE_OSX_ARCHITECTURES": "x86_64",
+                "VCPKG_TARGET_TRIPLET": "x64-ios-simulator-openloco"
+            }
+        },
+        {
             "name": "windows-base",
             "hidden": true,
             "binaryDir": "${sourceDir}/build/${presetName}",
@@ -281,13 +290,19 @@
             "name": "ios-device-release",
             "configurePreset": "ios-device",
             "configuration": "Release",
-            "targets": [ "App" ]
+            "targets": [ "IosBundleAudit" ]
         },
         {
             "name": "ios-simulator-release",
             "configurePreset": "ios-simulator",
             "configuration": "Release",
-            "targets": [ "App" ]
+            "targets": [ "IosBundleAudit" ]
+        },
+        {
+            "name": "ios-simulator-intel-release",
+            "configurePreset": "ios-simulator-intel",
+            "configuration": "Release",
+            "targets": [ "IosBundleAudit" ]
         },
         {
             "name": "windows-debug",

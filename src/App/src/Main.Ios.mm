@@ -130,7 +130,12 @@ namespace
 
     bool writeSmokeResult(const AppState& app)
     {
-        const bool passed = app.frames > 1 && app.smokeDialogs == 2 && app.setup.checks == 3 && app.setup.cancellations == 1 && app.setup.presentedViewController == nil;
+        const auto* rendererName = SDL_GetRendererName(app.renderer);
+        const bool metal = rendererName != nullptr && std::string_view(rendererName) == "metal";
+        int pixelWidth = 0;
+        int pixelHeight = 0;
+        const bool drawable = SDL_GetRenderOutputSize(app.renderer, &pixelWidth, &pixelHeight) && pixelWidth > 0 && pixelHeight > 0;
+        const bool passed = metal && drawable && app.frames > 1 && app.smokeDialogs == 2 && app.setup.checks == 3 && app.setup.cancellations == 1 && app.setup.presentedViewController == nil;
         const auto path = OpenLoco::Platform::getUserDirectory() / "ios-smoke-result.json";
         auto stagingPath = path;
         stagingPath += ".tmp";
@@ -140,6 +145,9 @@ namespace
                << ",\"checks\":" << app.setup.checks
                << ",\"cancellations\":" << app.setup.cancellations
                << ",\"dialogsPresented\":" << app.smokeDialogs
+               << ",\"metalRenderer\":" << (metal ? "true" : "false")
+               << ",\"pixelWidth\":" << pixelWidth
+               << ",\"pixelHeight\":" << pixelHeight
                << ",\"gameplayStarted\":false}\n";
         result.close();
         if (!result.good())
@@ -175,7 +183,12 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
     }
     *appstate = app.release();
     auto& state = *static_cast<AppState*>(*appstate);
-    if (!SDL_CreateWindowAndRenderer("OpenLoco", 1024, 768, SDL_WINDOW_HIGH_PIXEL_DENSITY, &state.window, &state.renderer))
+    state.window = SDL_CreateWindow("OpenLoco", 1024, 768, SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    if (state.window != nullptr)
+    {
+        state.renderer = SDL_CreateRenderer(state.window, "metal");
+    }
+    if (state.window == nullptr || state.renderer == nullptr)
     {
         SDL_Log("Window/renderer creation failed: %s", SDL_GetError());
         return SDL_APP_FAILURE;

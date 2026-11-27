@@ -6,11 +6,14 @@ No signing credentials, Apple membership, paid service or game data is needed
 for compilation and simulator testing. Unsigned device bundles cannot launch
 on a stock iPad.
 
-## Build on an Apple Silicon Mac or standard macOS CI runner
+## Build on an Intel or Apple Silicon Mac
 
 Install/select Xcode with its iOS platform and an available simulator runtime,
 CMake 3.22+, Ninja and Git. The unsigned workflow selects Xcode 26.2
-on the standard `macos-26` runner and fails clearly if that image/toolchain is unavailable.
+on the standard `macos-26-intel` runner and fails clearly if that image/toolchain
+is unavailable. These standard runners are free for public repositories; no
+larger/custom runner is configured. The Intel fallback is prepared locally and
+requires review/approval before publication and execution.
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode_26.2.app/Contents/Developer
@@ -22,16 +25,55 @@ bash scripts/smoke-ios-simulator.sh
 The build script bootstraps the exact vcpkg revision in the project, builds
 separate SDK-specific static dependencies, inspects the binary platform and
 desktop-library exclusions, and writes app/symbol/notice archives plus logs to
-`build/ios-{device,simulator}`. No IPA is labeled installable. No artifact is
+the build directories below. No IPA is labeled installable. No artifact is
 uploaded by the scripts; the GitHub workflow uploads only the selected
 unsigned build and diagnostic outputs with seven-day retention.
+
+| Mac host | Build | App architecture | Preset / build directory |
+| --- | --- | --- | --- |
+| Intel or Apple Silicon | Real iPad, unsigned | ARM64 | `ios-device` / `build/ios-device` |
+| Intel | iPad simulator | x86-64 | `ios-simulator-intel` / `build/ios-simulator-intel` |
+| Apple Silicon | iPad simulator | ARM64 | `ios-simulator` / `build/ios-simulator` |
+
+Both scripts select the simulator preset from the actual Mac host architecture.
+The device target always selects ARM64. Dependency installations, output bundles
+and evidence for the two simulator architectures stay in separate directories.
+The prepared CI jobs use Intel hosts for both the ARM64 device cross-build and
+the x86-64 simulator test. A passing Intel simulator test does not establish
+ARM64 simulator execution or physical-device behavior.
+The Metal presentation check remains enabled. If the hosted simulator cannot
+provide a working Metal device, the smoke check must fail and preserve its
+diagnostics; it must not silently substitute a renderer and claim Metal passed.
+
+Select an installed iOS simulator runtime compatible with Xcode 26.2. Intel Macs
+need the universal runtime variant; an Apple-Silicon-only runtime cannot boot on
+Intel. The launch script filters declared runtime architectures, checks the app's
+architecture and rejects absent compatible runtimes. It does not automatically
+download a large replacement or select a runtime newer than the chosen SDK.
+See [Apple's component installation documentation](https://developer.apple.com/documentation/xcode/downloading-and-installing-additional-xcode-components).
+
+The release presets build `IosBundleAudit` (which depends on `App`) before
+packaging. This stages notices inside the app and checks the resource inventory
+against the source checkout and installed dependency notices. The setup smoke
+check also requires Metal presentation and nonzero drawable pixel dimensions.
+
+The portable audit checks use synthetic resources and can run on Windows/Linux:
+
+```sh
+cmake -DTEST_ROOT=/absolute/disposable/test-directory -P scripts/tests/test-ios-bundle-audit.cmake
+bash scripts/tests/test-ios-build-selection.sh
+```
+
+See [the OpenRCT2 comparison](OPENRCT2-COMPARISON.md) for the pinned references,
+licensing boundary, changes applied here and the import/input transfer plan.
 
 The workflow runs only for pushes to `ios/unsigned-feasibility` or manual
 dispatch. GitHub requires a manual-only workflow on the default branch before
 it can be dispatched, so the restricted branch trigger allows the initial
 approved run without changing the default branch. Creating a commit, pushing
 that branch and initiating cloud execution still require owner approval. No
-workflow has been published or run as part of local preparation.
+new workflow run is initiated by local preparation. Earlier approved runs and
+their capacity failures are recorded separately in the local build evidence.
 
 The shell uses SDL3 callbacks and a native UIKit setup view, so the system owns
 the main run loop. The entire OpenLoco core archive is forced into the link,

@@ -2,18 +2,12 @@
 set -euo pipefail
 
 target="${1:-simulator}"
-case "$target" in
-    device) preset=ios-device; sdk=iphoneos ;;
-    simulator) preset=ios-simulator; sdk=iphonesimulator ;;
-    *) echo "Usage: $0 [device|simulator]" >&2; exit 2 ;;
-esac
-if [[ "$(uname -s)" != Darwin || "$(uname -m)" != arm64 ]]; then
-    echo "This unsigned build requires an Apple Silicon Mac with Xcode and the iOS platform installed." >&2
-    exit 2
-fi
-
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
+source "$root/scripts/ios-build-common.sh"
+openloco_select_ios_build "$target" "$(uname -s)" "$(uname -m)"
+preset="$ios_preset"
+sdk="$ios_sdk"
 evidence="$root/build/$preset/evidence"
 mkdir -p "$evidence"
 exec > >(tee "$evidence/build.log") 2>&1
@@ -29,6 +23,8 @@ xcrun simctl list runtimes
 cmake --version
 git rev-parse HEAD
 git diff --stat
+printf 'host-architecture=%s\ntarget=%s\npreset=%s\ntarget-architecture=%s\ntriplet=%s\nsdk=%s\nsigning=disabled\n' \
+    "$(uname -m)" "$target" "$preset" "$ios_arch" "$ios_triplet" "$sdk" | tee "$evidence/build-target.txt"
 
 revision="$(sed -n 's/^set(VCPKG_GIT_TAG \([0-9a-f]*\)).*/\1/p' CMakeLists.txt)"
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot read the pinned vcpkg revision" >&2; exit 1; }
@@ -62,15 +58,14 @@ app="$(find "$root/build/$preset" -type d -name OpenLoco.app -not -path '*_deps*
 [[ -n "$app" && -x "$app/OpenLoco" ]] || { echo "Built app bundle not found" >&2; exit 1; }
 plutil -lint "$app/Info.plist"
 file "$app/OpenLoco" | tee "$evidence/binary.txt"
-xcrun lipo -verify_arch arm64 "$app/OpenLoco"
+xcrun lipo -verify_arch "$ios_arch" "$app/OpenLoco"
 xcrun vtool -show-build "$app/OpenLoco" | tee "$evidence/platform.txt"
 otool -L "$app/OpenLoco" | tee "$evidence/linked-libraries.txt"
 if grep -Eq 'Cocoa|AppKit|/opt/homebrew|/usr/local/|libclang_rt.*osx' "$evidence/linked-libraries.txt"; then
     echo "Unexpected desktop library in iOS bundle" >&2
     exit 1
 fi
-expected=IOS
-[[ "$target" == simulator ]] && expected=IOSSIMULATOR
+expected="$ios_platform"
 grep -Eq "platform[[:space:]]+$expected([[:space:]]|$)" "$evidence/platform.txt" || { echo "Wrong Mach-O platform" >&2; exit 1; }
 [[ -d "$app/language" && -d "$app/objects" ]] || { echo "Bundled language/object resources missing" >&2; exit 1; }
 

@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-build="$root/build/ios-simulator"
+source "$root/scripts/ios-build-common.sh"
+openloco_select_ios_build simulator "$(uname -s)" "$(uname -m)"
+build="$root/build/$ios_preset"
 evidence="$build/evidence"
 mkdir -p "$evidence"
 app="$(cat "$evidence/app-path.txt")"
+xcrun lipo -verify_arch "$ios_arch" "$app/OpenLoco"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
 
 # Choose an available runtime/device type explicitly; do not depend on a booted
 # simulator left behind by another job or the runner's default device model.
 sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version)"
-runtime="$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; version=lambda s:tuple(map(int,s.split(".")[:2])); sdk=version(sys.argv[1]); r=[x for x in json.load(sys.stdin)["runtimes"] if x.get("isAvailable") and x["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-") and (17,0)<=version(x["version"])<=sdk]; r.sort(key=lambda x:tuple(map(int,x["version"].split(".")))); print(r[-1]["identifier"] if r else "")' "$sdk_version")"
+runtime="$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; version=lambda s:tuple(map(int,s.split(".")[:2])); sdk=version(sys.argv[1]); arch=sys.argv[2]; r=[x for x in json.load(sys.stdin)["runtimes"] if x.get("isAvailable") and x["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-") and (17,0)<=version(x["version"])<=sdk and arch in x.get("supportedArchitectures",[arch])]; r.sort(key=lambda x:tuple(map(int,x["version"].split(".")))); print(r[-1]["identifier"] if r else "")' "$sdk_version" "$ios_arch")"
 device_type="$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; d=[x for x in json.load(sys.stdin)["devicetypes"] if x.get("productFamily")=="iPad"]; print(next((x["identifier"] for x in d if "iPad-Pro-11-inch-M4" in x["identifier"]),d[-1]["identifier"] if d else ""))')"
-[[ -n "$runtime" && -n "$device_type" ]] || { echo "No available iPad/iOS simulator runtime" >&2; exit 1; }
+[[ -n "$runtime" && -n "$device_type" ]] || { echo "No compatible iPad/iOS runtime for $ios_arch and SDK $sdk_version. Intel Macs require a universal simulator runtime." >&2; exit 1; }
 device="$(xcrun simctl create OpenLoco-Unsigned-Smoke "$device_type" "$runtime")"
 cleanup() {
     xcrun simctl terminate "$device" "$bundle_id" >/dev/null 2>&1 || true
@@ -44,8 +47,9 @@ with open(sys.argv[1]) as stream:
 assert result["passed"] is True and result["gameplayStarted"] is False, result
 assert result["frames"] > 1 and result["checks"] == 3 and result["cancellations"] == 1, result
 assert result["dialogsPresented"] == 2, result
-print("Setup screen rendered; cancel/retry handlers passed. Gameplay was not started.")
+assert result["metalRenderer"] is True and result["pixelWidth"] > 0 and result["pixelHeight"] > 0, result
+print("Setup screen rendered through Metal; cancel/retry handlers passed. Gameplay was not started.")
 PY
 xcrun simctl io "$device" screenshot "$evidence/setup-screen.png"
 xcrun simctl spawn "$device" log show --last 2m --style compact --predicate 'process == "OpenLoco"' > "$evidence/simulator-console.txt" || true
-printf 'runtime=%s\ndevice-type=%s\ndevice=%s\n' "$runtime" "$device_type" "$device" > "$evidence/simulator-environment.txt"
+printf 'runtime=%s\ndevice-type=%s\ndevice=%s\narchitecture=%s\npreset=%s\n' "$runtime" "$device_type" "$device" "$ios_arch" "$ios_preset" > "$evidence/simulator-environment.txt"

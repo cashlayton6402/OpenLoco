@@ -3,6 +3,13 @@
 set(OPENLOCO_IOS_BUNDLE_ID "io.openloco.ios.development" CACHE STRING "Unsigned iOS bundle identifier")
 set(OPENLOCO_IOS_BUILD_NUMBER "1" CACHE STRING "Numeric iOS build number")
 
+# Device eligibility must not exclude the x86-64 simulator build.
+set(OPENLOCO_IOS_REQUIRED_DEVICE_CAPABILITIES "")
+string(TOLOWER "${CMAKE_OSX_SYSROOT}" ios_sysroot)
+if (NOT ios_sysroot MATCHES "iphonesimulator")
+    set(OPENLOCO_IOS_REQUIRED_DEVICE_CAPABILITIES "<key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>")
+endif()
+
 set_target_properties(App PROPERTIES
     MACOSX_BUNDLE ON
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/distribution/ios/Info.plist.in"
@@ -41,3 +48,19 @@ target_sources(App PRIVATE ${ios_languages} ${ios_objects} ${ios_notices})
 set_source_files_properties(${ios_languages} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/language")
 set_source_files_properties(${ios_objects} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/objects")
 set_source_files_properties(${ios_notices} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
+# Keep notices in the app itself and audit its complete resource inventory before
+# the unsigned build script can package it. Do not apply this to signed bundles.
+add_custom_target(IosBundleAudit
+    COMMAND "${CMAKE_COMMAND}"
+        "-DAPP=$<TARGET_BUNDLE_DIR:App>"
+        "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DOBJECTS_DIR=${openloco_objects_SOURCE_DIR}"
+        "-DINSTALLED_DIR=${VCPKG_INSTALLED_DIR}"
+        "-DTRIPLET=${VCPKG_TARGET_TRIPLET}"
+        "-DREPORT_FILE=${CMAKE_BINARY_DIR}/evidence/bundle-audit.json"
+        -DSTAGE_NOTICES=ON
+        -P "${CMAKE_SOURCE_DIR}/scripts/audit-ios-bundle.cmake"
+    COMMENT "Staging dependency notices and auditing unsigned iOS resources"
+    DEPENDS App
+    VERBATIM)
