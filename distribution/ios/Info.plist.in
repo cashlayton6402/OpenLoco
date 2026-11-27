@@ -13,6 +13,20 @@
     <key>MinimumOSVersion</key><string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string>
     <key>UIDeviceFamily</key><array><integer>2</integer></array>
     ${OPENLOCO_IOS_REQUIRED_DEVICE_CAPABILITIES}
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key><false/>
+        <key>UISceneConfigurations</key>
+        <dict>
+            <key>UIWindowSceneSessionRoleApplication</key>
+            <array><dict>
+                <key>UISceneConfigurationName</key><string>SDLSceneConfiguration</string>
+                <key>UISceneDelegateClassName</key><string>SDLUIKitSceneDelegate</string>
+            </dict></array>
+        </dict>
+    </dict>
+    <key>UISupportedInterfaceOrientations</key>
+    <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
     <key>UISupportedInterfaceOrientations~ipad</key>
     <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
     <key>UILaunchScreen</key><dict/>

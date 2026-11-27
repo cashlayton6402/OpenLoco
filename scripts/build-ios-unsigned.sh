@@ -71,10 +71,29 @@ grep -Eq "platform[[:space:]]+$expected([[:space:]]|$)" "$evidence/platform.txt"
 
 artifacts="$root/build/$preset/artifacts"
 mkdir -p "$artifacts/notices"
+# Never accept compiler-probe symbols or leftover ZIPs from an older run.
+while IFS= read -r -d '' archive; do
+    case "$(basename "$archive")" in
+        "OpenLoco-$preset-unsigned.app.zip"|OpenLoco.app.dSYM.zip) ;;
+        *) echo "Unexpected archive in staging; use a clean build directory: $archive" >&2; exit 1 ;;
+    esac
+done < <(find "$artifacts" -name '*.zip' -print0)
+symbols="$app.dSYM"
+[[ -s "$symbols/Contents/Resources/DWARF/OpenLoco" ]] || { echo "App dSYM missing: $symbols" >&2; exit 1; }
+xcrun dwarfdump --uuid "$app/OpenLoco" > "$evidence/app-uuids.txt"
+xcrun dwarfdump --uuid "$symbols" > "$evidence/dsym-uuids.txt"
+python3 scripts/verify-ios-evidence.py symbols "$app" "$symbols" "$ios_arch" \
+    "$evidence/app-uuids.txt" "$evidence/dsym-uuids.txt" > "$evidence/symbol-match.json"
+xcrun dwarfdump --verify "$symbols" > "$evidence/dsym-verification.txt" 2>&1
+# UUIDs alone also exist in empty dSYMs. Require real app and engine compile units.
+xcrun dwarfdump --debug-info "$symbols" | awk '
+    /DW_TAG_compile_unit/ { units++ }
+    /DW_AT_name.*Main.Ios.mm/ { app=1 }
+    /DW_AT_name.*World\/TownManager.cpp/ { engine=1 }
+    END { print "compile-units=" units "; app-source=" app "; engine-source=" engine; exit !(units > 1 && app && engine) }
+' > "$evidence/dsym-debug-info.txt"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$artifacts/OpenLoco-$preset-unsigned.app.zip"
-while IFS= read -r -d '' symbols; do
-    ditto -c -k --sequesterRsrc --keepParent "$symbols" "$artifacts/$(basename "$symbols").zip"
-done < <(find "$root/build/$preset" -type d -name '*.dSYM' -not -path '*_deps*' -print0)
+ditto -c -k --sequesterRsrc --keepParent "$symbols" "$artifacts/OpenLoco.app.dSYM.zip"
 while IFS= read -r -d '' notice; do
     component="$(basename "$(dirname "$notice")")"
     cp "$notice" "$artifacts/notices/$component.txt"

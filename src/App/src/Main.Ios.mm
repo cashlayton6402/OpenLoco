@@ -4,6 +4,7 @@
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
 #import <UIKit/UIKit.h>
+#include <cmath>
 #include <exception>
 #include <fstream>
 #include <memory>
@@ -128,6 +129,25 @@ namespace
         bool background = false;
     };
 
+    bool landscapeFillsScene(const AppState& app)
+    {
+        UIWindow* window = app.setup.view.window;
+        UIWindowScene* scene = window.windowScene;
+        if (scene == nil || !UIInterfaceOrientationIsLandscape(scene.effectiveGeometry.interfaceOrientation))
+        {
+            return false;
+        }
+        const CGRect sceneBounds = scene.coordinateSpace.bounds;
+        const CGRect windowFrame = [window convertRect:window.bounds toCoordinateSpace:scene.coordinateSpace];
+        const CGRect setupFrame = [app.setup.view convertRect:app.setup.view.bounds toView:window];
+        const auto matches = [](CGRect a, CGRect b) {
+            return std::abs(a.origin.x - b.origin.x) < 1 && std::abs(a.origin.y - b.origin.y) < 1
+                && std::abs(a.size.width - b.size.width) < 1 && std::abs(a.size.height - b.size.height) < 1;
+        };
+        return sceneBounds.size.width > sceneBounds.size.height
+            && matches(windowFrame, sceneBounds) && matches(setupFrame, window.bounds);
+    }
+
     bool writeSmokeResult(const AppState& app)
     {
         const auto* rendererName = SDL_GetRendererName(app.renderer);
@@ -135,7 +155,12 @@ namespace
         int pixelWidth = 0;
         int pixelHeight = 0;
         const bool drawable = SDL_GetRenderOutputSize(app.renderer, &pixelWidth, &pixelHeight) && pixelWidth > 0 && pixelHeight > 0;
-        const bool passed = metal && drawable && app.frames > 1 && app.smokeDialogs == 2 && app.setup.checks == 3 && app.setup.cancellations == 1 && app.setup.presentedViewController == nil;
+        UIWindow* window = app.setup.view.window;
+        const CGSize sceneSize = window.windowScene.coordinateSpace.bounds.size;
+        const CGSize windowSize = window.bounds.size;
+        const CGSize setupSize = app.setup.view.bounds.size;
+        const bool fillsScene = landscapeFillsScene(app);
+        const bool passed = metal && drawable && fillsScene && pixelWidth > pixelHeight && app.frames > 1 && app.smokeDialogs == 2 && app.setup.checks == 3 && app.setup.cancellations == 1 && app.setup.presentedViewController == nil;
         const auto path = OpenLoco::Platform::getUserDirectory() / "ios-smoke-result.json";
         auto stagingPath = path;
         stagingPath += ".tmp";
@@ -148,6 +173,10 @@ namespace
                << ",\"metalRenderer\":" << (metal ? "true" : "false")
                << ",\"pixelWidth\":" << pixelWidth
                << ",\"pixelHeight\":" << pixelHeight
+               << ",\"landscapeFillsScene\":" << (fillsScene ? "true" : "false")
+               << ",\"sceneWidth\":" << sceneSize.width << ",\"sceneHeight\":" << sceneSize.height
+               << ",\"windowWidth\":" << windowSize.width << ",\"windowHeight\":" << windowSize.height
+               << ",\"setupWidth\":" << setupSize.width << ",\"setupHeight\":" << setupSize.height
                << ",\"gameplayStarted\":false}\n";
         result.close();
         if (!result.good())
@@ -176,6 +205,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
         SDL_Log("Application storage initialization failed: %s", error.what());
         return SDL_APP_FAILURE;
     }
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         SDL_Log("SDL initialization failed: %s", SDL_GetError());
@@ -183,7 +213,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
     }
     *appstate = app.release();
     auto& state = *static_cast<AppState*>(*appstate);
-    state.window = SDL_CreateWindow("OpenLoco", 1024, 768, SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    state.window = SDL_CreateWindow("OpenLoco", 1024, 768, SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_FULLSCREEN);
     if (state.window != nullptr)
     {
         state.renderer = SDL_CreateRenderer(state.window, "metal");
@@ -203,10 +233,21 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
     }
     state.setup = [OpenLocoSetupController new];
     [root addChildViewController:state.setup];
-    state.setup.view.frame = root.view.bounds;
-    state.setup.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    state.setup.view.translatesAutoresizingMaskIntoConstraints = NO;
     [root.view addSubview:state.setup.view];
+    [NSLayoutConstraint activateConstraints:@[
+        [state.setup.view.leadingAnchor constraintEqualToAnchor:root.view.leadingAnchor],
+        [state.setup.view.trailingAnchor constraintEqualToAnchor:root.view.trailingAnchor],
+        [state.setup.view.topAnchor constraintEqualToAnchor:root.view.topAnchor],
+        [state.setup.view.bottomAnchor constraintEqualToAnchor:root.view.bottomAnchor],
+    ]];
     [state.setup didMoveToParentViewController:root];
+    [root setNeedsUpdateOfSupportedInterfaceOrientations];
+    UIWindowSceneGeometryPreferencesIOS* geometry = [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:UIInterfaceOrientationMaskLandscape];
+    [window.windowScene requestGeometryUpdateWithPreferences:geometry
+                                                errorHandler:^(NSError* error) {
+                                                    SDL_Log("Landscape geometry request failed: %s", error.localizedDescription.UTF8String);
+                                                }];
     state.started = SDL_GetTicks();
     state.smokeNextStep = state.started + 1000;
     SDL_Log("OpenLoco iOS setup ready; renderer=%s; core=%s", SDL_GetRendererName(state.renderer), OpenLoco::Version::kVersion);
@@ -250,6 +291,18 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     // This is a smoke check, not a substitute for XCTest taps or real device tests.
     if (app.smokeTest && app.smokeStage <= 4 && SDL_GetTicks() >= app.smokeNextStep)
     {
+        // UIKit rotation is asynchronous. Allow it to settle before exercising
+        // dialogs, but report a failed result if the scene never fills correctly.
+        if (app.smokeStage == 0 && !landscapeFillsScene(app))
+        {
+            if (SDL_GetTicks() - app.started < 10000)
+            {
+                return SDL_APP_CONTINUE;
+            }
+            writeSmokeResult(app);
+            SDL_Log("Landscape scene did not settle within 10 seconds.");
+            return SDL_APP_FAILURE;
+        }
         app.smokeNextStep = SDL_GetTicks() + 700;
         switch (app.smokeStage++)
         {

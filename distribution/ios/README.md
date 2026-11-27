@@ -55,13 +55,29 @@ See [Apple's component installation documentation](https://developer.apple.com/d
 The release presets build `IosBundleAudit` (which depends on `App`) before
 packaging. This stages notices inside the app and checks the resource inventory
 against the source checkout and installed dependency notices. The setup smoke
-check also requires Metal presentation and nonzero drawable pixel dimensions.
+check also requires Metal presentation, a landscape UIKit scene filled by both
+the window and setup view, and a raw landscape screenshot whose pixel dimensions
+match the drawable. UIKit gets up to ten seconds to settle before dialog checks.
+The scene manifest uses SDL3's built-in scene delegate; the app requests landscape
+through the public scene geometry API and sets SDL's orientation hint before
+initializing video. Setup view edges follow the root view using constraints.
+
+Release iOS compilation includes debug information for the app and engine.
+Packaging requires the adjacent `OpenLoco.app.dSYM`, an exact architecture/UUID
+match with the executable, successful DWARF verification, and compile-unit
+information for both `Main.Ios.mm` and the engine's `World/TownManager.cpp`.
+Only that dSYM is exported; compiler-probe bundles are ignored. Unexpected ZIPs
+already in the artifact staging directory stop packaging and require a clean
+build directory. Symbol UUID reports and DWARF verification are kept as evidence.
+See [Apple's symbol guidance](https://developer.apple.com/documentation/xcode/building-your-app-to-include-debugging-information)
+and [SDL's orientation hint](https://wiki.libsdl.org/SDL3/SDL_HINT_ORIENTATIONS).
 
 The portable audit checks use synthetic resources and can run on Windows/Linux:
 
 ```sh
 cmake -DTEST_ROOT=/absolute/disposable/test-directory -P scripts/tests/test-ios-bundle-audit.cmake
 bash scripts/tests/test-ios-build-selection.sh
+python3 scripts/tests/test-ios-evidence.py
 ```
 
 See [the OpenRCT2 comparison](OPENRCT2-COMPARISON.md) for the pinned references,

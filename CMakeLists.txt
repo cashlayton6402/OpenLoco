@@ -70,6 +70,10 @@ project(${PROJECT} LANGUAGES CXX VERSION 26.09)
 
 if (OPENLOCO_IOS)
     enable_language(OBJCXX)
+    # App and all forced-in engine objects need DWARF in Release, not just the
+    # final executable's dSYM setting. Keep desktop compilation unchanged.
+    add_compile_options("$<$<CONFIG:Release>:-g>")
+    set(CMAKE_XCODE_ATTRIBUTE_GCC_GENERATE_DEBUGGING_SYMBOLS YES)
 endif()
 
 # Enable IPO for all Release targets by default

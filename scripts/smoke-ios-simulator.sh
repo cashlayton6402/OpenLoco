@@ -35,21 +35,15 @@ for attempt in {1..30}; do
     sleep 1
 done
 if [[ ! -f "$result" ]]; then
+    xcrun simctl io "$device" screenshot "$evidence/setup-screen.png" || true
     xcrun simctl spawn "$device" log show --last 2m --style compact --predicate 'process == "OpenLoco"' > "$evidence/simulator-console.txt" || true
     echo "Setup smoke result did not arrive; inspect simulator console/crash logs" >&2
     exit 1
 fi
 cp "$result" "$evidence/ios-smoke-result.json"
-python3 - "$evidence/ios-smoke-result.json" <<'PY'
-import json, sys
-with open(sys.argv[1]) as stream:
-    result = json.load(stream)
-assert result["passed"] is True and result["gameplayStarted"] is False, result
-assert result["frames"] > 1 and result["checks"] == 3 and result["cancellations"] == 1, result
-assert result["dialogsPresented"] == 2, result
-assert result["metalRenderer"] is True and result["pixelWidth"] > 0 and result["pixelHeight"] > 0, result
-print("Setup screen rendered through Metal; cancel/retry handlers passed. Gameplay was not started.")
-PY
+# Capture diagnostics before validation so failures retain the unmodified image.
 xcrun simctl io "$device" screenshot "$evidence/setup-screen.png"
 xcrun simctl spawn "$device" log show --last 2m --style compact --predicate 'process == "OpenLoco"' > "$evidence/simulator-console.txt" || true
 printf 'runtime=%s\ndevice-type=%s\ndevice=%s\narchitecture=%s\npreset=%s\n' "$runtime" "$device_type" "$device" "$ios_arch" "$ios_preset" > "$evidence/simulator-environment.txt"
+python3 "$root/scripts/verify-ios-evidence.py" smoke "$evidence/ios-smoke-result.json" \
+    "$evidence/setup-screen.png" | tee "$evidence/screen-validation.json"

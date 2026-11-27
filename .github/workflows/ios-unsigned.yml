@@ -27,6 +27,8 @@ jobs:
         run: cmake "-DTEST_ROOT=$RUNNER_TEMP/openloco-resource-audit" -P scripts/tests/test-ios-bundle-audit.cmake
       - name: Verify host and target selection
         run: bash scripts/tests/test-ios-build-selection.sh
+      - name: Reject mismatched symbols and letterboxed screen evidence
+        run: python3 scripts/tests/test-ios-evidence.py
 
   build:
     name: Unsigned iOS ${{ matrix.target }} (${{ matrix.architecture }})
