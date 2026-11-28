@@ -26,9 +26,9 @@
         </dict>
     </dict>
     <key>UISupportedInterfaceOrientations</key>
-    <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+    <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string></array>
     <key>UISupportedInterfaceOrientations~ipad</key>
-    <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+    <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string></array>
     <key>UILaunchScreen</key><dict/>
     <key>NSHumanReadableCopyright</key><string>OpenLoco developers. MIT License.</string>
 </dict>

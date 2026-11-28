@@ -1,11 +1,11 @@
 #include "IosSetupSmoke.h"
+#include "IosViewGeometry.h"
 #include <OpenLoco/Platform/Platform.h>
 #include <OpenLoco/Version.hpp>
 #include <SDL3/SDL.h>
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
 #import <UIKit/UIKit.h>
-#include <cmath>
 #include <exception>
 #include <fstream>
 #include <memory>
@@ -31,6 +31,14 @@
 {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor colorWithRed:0.07 green:0.10 blue:0.14 alpha:1.0];
+
+    UIScrollView* scroll = [UIScrollView new];
+    scroll.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:scroll];
+    UIView* content = [UIView new];
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:content];
 
     UILabel* title = [UILabel new];
     title.text = @"OpenLoco";
@@ -61,19 +69,35 @@
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 24;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:stack];
+    [content addSubview:stack];
     UILayoutGuide* safe = self.view.safeAreaLayoutGuide;
+    NSLayoutConstraint* preferredHeight = [content.heightAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.heightAnchor];
+    preferredHeight.priority = UILayoutPriorityDefaultLow;
+    NSLayoutConstraint* preferredWidth = [stack.widthAnchor constraintEqualToAnchor:content.widthAnchor constant:-64];
+    preferredWidth.priority = UILayoutPriorityDefaultHigh;
     [NSLayoutConstraint activateConstraints:@[
-        [stack.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
-        [stack.centerYAnchor constraintEqualToAnchor:safe.centerYAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:safe.topAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
+        [content.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
+        [content.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
+        [content.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
+        [content.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
+        [content.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
+        [content.heightAnchor constraintGreaterThanOrEqualToAnchor:scroll.frameLayoutGuide.heightAnchor],
+        preferredHeight,
+        preferredWidth,
+        [stack.centerXAnchor constraintEqualToAnchor:content.centerXAnchor],
+        [stack.centerYAnchor constraintEqualToAnchor:content.centerYAnchor],
         [stack.widthAnchor constraintLessThanOrEqualToConstant:560],
-        [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:safe.leadingAnchor
+        [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:content.leadingAnchor
                                                          constant:32],
-        [stack.trailingAnchor constraintLessThanOrEqualToAnchor:safe.trailingAnchor
+        [stack.trailingAnchor constraintLessThanOrEqualToAnchor:content.trailingAnchor
                                                        constant:-32],
-        [stack.topAnchor constraintGreaterThanOrEqualToAnchor:safe.topAnchor
+        [stack.topAnchor constraintGreaterThanOrEqualToAnchor:content.topAnchor
                                                      constant:24],
-        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:safe.bottomAnchor
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor
                                                      constant:-24],
         [self.checkButton.heightAnchor constraintGreaterThanOrEqualToConstant:48],
     ]];
@@ -171,47 +195,63 @@ namespace
         bool background = false;
     };
 
-    bool landscapeFillsScene(const AppState& app)
+    OpenLoco::Ios::ViewGeometry readViewGeometry(const AppState& app)
     {
+        OpenLoco::Ios::ViewGeometry geometry;
         UIWindow* window = app.setup.view.window;
         UIWindowScene* scene = window.windowScene;
-        if (scene == nil || !UIInterfaceOrientationIsLandscape(scene.effectiveGeometry.interfaceOrientation))
+        if (scene == nil)
         {
-            return false;
+            return geometry;
         }
-        const CGRect sceneBounds = scene.coordinateSpace.bounds;
-        const CGRect windowFrame = [window convertRect:window.bounds toCoordinateSpace:scene.coordinateSpace];
-        const CGRect setupFrame = [app.setup.view convertRect:app.setup.view.bounds toView:window];
-        const auto matches = [](CGRect a, CGRect b) {
-            return std::abs(a.origin.x - b.origin.x) < 1 && std::abs(a.origin.y - b.origin.y) < 1
-                && std::abs(a.size.width - b.size.width) < 1 && std::abs(a.size.height - b.size.height) < 1;
+        const auto rect = [](CGRect value) {
+            return OpenLoco::Ios::ViewRect{ value.origin.x, value.origin.y, value.size.width, value.size.height };
         };
-        return sceneBounds.size.width > sceneBounds.size.height
-            && matches(windowFrame, sceneBounds) && matches(setupFrame, window.bounds);
+        geometry.scene = rect(scene.coordinateSpace.bounds);
+        geometry.windowInScene = rect([window convertRect:window.bounds toCoordinateSpace:scene.coordinateSpace]);
+        geometry.windowBounds = rect(window.bounds);
+        geometry.setupInWindow = rect([app.setup.view convertRect:app.setup.view.bounds toView:window]);
+        geometry.screen = rect(scene.screen.coordinateSpace.bounds);
+        geometry.windowInScreen = rect([window convertRect:window.bounds toCoordinateSpace:scene.screen.coordinateSpace]);
+        geometry.scale = scene.screen.scale;
+        if (app.renderer != nullptr && !SDL_GetRenderOutputSize(app.renderer, &geometry.pixelWidth, &geometry.pixelHeight))
+        {
+            geometry.pixelWidth = geometry.pixelHeight = 0;
+        }
+        return geometry;
     }
 
     bool writeSmokeResult(AppState& app, bool final = true)
     {
         const auto* rendererName = app.renderer != nullptr ? SDL_GetRendererName(app.renderer) : nullptr;
         const bool metal = rendererName != nullptr && std::string_view(rendererName) == "metal";
-        int pixelWidth = 0;
-        int pixelHeight = 0;
-        const bool drawable = app.renderer != nullptr && SDL_GetRenderOutputSize(app.renderer, &pixelWidth, &pixelHeight) && pixelWidth > 0 && pixelHeight > 0;
+        const auto geometry = readViewGeometry(app);
         UIWindow* window = app.setup.view.window;
-        const CGSize sceneSize = window.windowScene.coordinateSpace.bounds.size;
-        const CGSize windowSize = window.bounds.size;
-        const CGSize setupSize = app.setup.view.bounds.size;
-        const bool fillsScene = landscapeFillsScene(app);
-        const bool passed = final && app.smoke.complete() && !app.smoke.failed() && metal && drawable && fillsScene && pixelWidth > pixelHeight && app.frames > 1 && app.setup.dialogsPresented == 2 && app.setup.dialogsDismissed == 2 && app.setup.checks == 3 && app.setup.cancellations == 1 && app.setup.activeAlert == nil && !app.setup.dialogTransitionPending && app.setup.presentedViewController == nil;
+        const auto orientation = window.windowScene.effectiveGeometry.interfaceOrientation;
+        const bool orientationKnown = UIInterfaceOrientationIsLandscape(orientation) || UIInterfaceOrientationIsPortrait(orientation);
+        const bool passed = final && app.smoke.complete() && !app.smoke.failed() && metal && orientationKnown && geometry.fillsScreen() && geometry.drawableMatchesScreen() && app.frames > 1 && app.setup.dialogsPresented == 2 && app.setup.dialogsDismissed == 2 && app.setup.checks == 3 && app.setup.cancellations == 1 && app.setup.activeAlert == nil && !app.setup.dialogTransitionPending && app.setup.presentedViewController == nil;
         if (final && !passed && !app.smoke.failed())
         {
-            app.smoke.fail("final-verification-failed");
+            if (!geometry.fillsScreen())
+            {
+                app.smoke.fail("screen-coverage-mismatch");
+            }
+            else if (!geometry.drawableMatchesScreen())
+            {
+                app.smoke.fail("drawable-screen-mismatch");
+            }
+            else
+            {
+                app.smoke.fail("final-verification-failed");
+            }
         }
         const auto path = OpenLoco::Platform::getUserDirectory() / (final ? "ios-smoke-result.json" : "ios-smoke-progress.json");
         auto stagingPath = path;
         stagingPath += ".tmp";
         std::ofstream result(stagingPath);
-        result << "{\"resultVersion\":2,\"passed\":" << (passed ? "true" : "false")
+        result << "{\"resultVersion\":3,\"passed\":" << (passed ? "true" : "false")
+               << ",\"orientationPolicy\":\"adaptive-setup\""
+               << ",\"interfaceOrientation\":" << static_cast<int>(orientation)
                << ",\"stage\":\"" << app.smoke.stageName() << "\""
                << ",\"failureReason\":\"" << app.smoke.failureReason() << "\""
                << ",\"elapsedMs\":" << SDL_GetTicks() - app.started
@@ -223,12 +263,19 @@ namespace
                << ",\"presentationPending\":" << (app.setup.dialogTransitionPending ? "true" : "false")
                << ",\"activeDialog\":" << (app.setup.activeAlert != nil ? "true" : "false")
                << ",\"metalRenderer\":" << (metal ? "true" : "false")
-               << ",\"pixelWidth\":" << pixelWidth
-               << ",\"pixelHeight\":" << pixelHeight
-               << ",\"landscapeFillsScene\":" << (fillsScene ? "true" : "false")
-               << ",\"sceneWidth\":" << sceneSize.width << ",\"sceneHeight\":" << sceneSize.height
-               << ",\"windowWidth\":" << windowSize.width << ",\"windowHeight\":" << windowSize.height
-               << ",\"setupWidth\":" << setupSize.width << ",\"setupHeight\":" << setupSize.height
+               << ",\"pixelWidth\":" << geometry.pixelWidth
+               << ",\"pixelHeight\":" << geometry.pixelHeight
+               << ",\"setupFillsScene\":" << (geometry.fillsScene() ? "true" : "false")
+               << ",\"windowFillsScreen\":" << (geometry.fillsScreen() ? "true" : "false")
+               << ",\"drawableMatchesScreen\":" << (geometry.drawableMatchesScreen() ? "true" : "false")
+               << ",\"sceneWidth\":" << geometry.scene.width << ",\"sceneHeight\":" << geometry.scene.height
+               << ",\"windowWidth\":" << geometry.windowBounds.width << ",\"windowHeight\":" << geometry.windowBounds.height
+               << ",\"setupWidth\":" << geometry.setupInWindow.width << ",\"setupHeight\":" << geometry.setupInWindow.height
+               << ",\"screenX\":" << geometry.screen.x << ",\"screenY\":" << geometry.screen.y
+               << ",\"screenWidth\":" << geometry.screen.width << ",\"screenHeight\":" << geometry.screen.height
+               << ",\"windowScreenX\":" << geometry.windowInScreen.x << ",\"windowScreenY\":" << geometry.windowInScreen.y
+               << ",\"windowScreenWidth\":" << geometry.windowInScreen.width << ",\"windowScreenHeight\":" << geometry.windowInScreen.height
+               << ",\"screenScale\":" << geometry.scale
                << ",\"gameplayStarted\":false}\n";
         result.close();
         if (!result.good())
@@ -263,7 +310,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
         SDL_Log("Application storage initialization failed: %s", error.what());
         return SDL_APP_FAILURE;
     }
-    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait PortraitUpsideDown");
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         SDL_Log("SDL initialization failed: %s", SDL_GetError());
@@ -271,7 +318,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
     }
     *appstate = app.release();
     auto& state = *static_cast<AppState*>(*appstate);
-    state.window = SDL_CreateWindow("OpenLoco", 1024, 768, SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_FULLSCREEN);
+    state.window = SDL_CreateWindow("OpenLoco", 1024, 768, SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_RESIZABLE);
     if (state.window != nullptr)
     {
         state.renderer = SDL_CreateRenderer(state.window, "metal");
@@ -300,12 +347,6 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
         [state.setup.view.bottomAnchor constraintEqualToAnchor:root.view.bottomAnchor],
     ]];
     [state.setup didMoveToParentViewController:root];
-    [root setNeedsUpdateOfSupportedInterfaceOrientations];
-    UIWindowSceneGeometryPreferencesIOS* geometry = [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:UIInterfaceOrientationMaskLandscape];
-    [window.windowScene requestGeometryUpdateWithPreferences:geometry
-                                                errorHandler:^(NSError* error) {
-                                                    SDL_Log("Landscape geometry request failed: %s", error.localizedDescription.UTF8String);
-                                                }];
     state.started = SDL_GetTicks();
     state.smoke = OpenLoco::Ios::SetupSmoke(state.started);
     if (state.smokeTest)
@@ -370,8 +411,9 @@ SDL_AppResult SDL_AppIterate(void* appstate)
         using Smoke = OpenLoco::Ios::SetupSmoke;
         UIWindow* window = app.setup.view.window;
         UIAlertController* alert = app.setup.activeAlert;
+        const auto geometry = readViewGeometry(app);
         const Smoke::Observation ui{
-            .sceneReady = landscapeFillsScene(app) && window.windowScene.activationState == UISceneActivationStateForegroundActive && window.rootViewController.transitionCoordinator == nil,
+            .sceneReady = geometry.fillsScreen() && geometry.drawableMatchesScreen() && window.windowScene.activationState == UISceneActivationStateForegroundActive && window.rootViewController.transitionCoordinator == nil,
             .dialogReady = alert != nil && !app.setup.dialogTransitionPending && alert.viewIfLoaded.window != nil && !alert.isBeingPresented && !alert.isBeingDismissed,
             .dialogIdle = alert == nil && !app.setup.dialogTransitionPending && app.setup.presentedViewController == nil,
             .checks = app.setup.checks,

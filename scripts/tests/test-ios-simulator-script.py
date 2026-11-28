@@ -34,12 +34,20 @@ elif args[:2] == ["simctl", "launch"]:
         sys.exit(23)
     data = root / "container/Library/Application Support/OpenLoco"
     data.mkdir(parents=True, exist_ok=True)
-    result = dict(resultVersion=2,stage="complete",failureReason="",passed=True,
+    result = dict(resultVersion=3,orientationPolicy="adaptive-setup",interfaceOrientation=3,
+                  stage="complete",failureReason="",passed=True,
                   gameplayStarted=False,frames=50,checks=3,cancellations=1,
                   dialogsPresented=2,dialogsDismissed=2,presentationPending=False,
-                  activeDialog=False,metalRenderer=True,landscapeFillsScene=True,
+                  activeDialog=False,metalRenderer=True,setupFillsScene=True,
+                  windowFillsScreen=True,drawableMatchesScreen=True,
+                  screenX=0,screenY=0,windowScreenX=0,windowScreenY=0,screenScale=2,
+                  screenWidth=1210,screenHeight=834,windowScreenWidth=1210,windowScreenHeight=834,
                   pixelWidth=2420,pixelHeight=1668,sceneWidth=1210,sceneHeight=834,
                   windowWidth=1210,windowHeight=834,setupWidth=1210,setupHeight=834)
+    if mode == "portrait-success":
+        for prefix in ("scene", "window", "setup", "screen", "windowScreen"):
+            result[prefix+"Width"], result[prefix+"Height"] = 834, 1210
+        result.update(interfaceOrientation=1,pixelWidth=1668,pixelHeight=2420)
     if mode in ("failed-result", "console-failure"):
         result.update(passed=False,stage="wait-for-cancel-dismissal",failureReason="transition-timeout")
     (data / "ios-smoke-progress.json").write_text(json.dumps(result))
@@ -52,7 +60,8 @@ elif args[:2] == ["simctl", "io"]:
     # PNG metadata fixture only, not a screenshot of a running application.
     if mode == "screenshot-failure":
         sys.exit(24)
-    pathlib.Path(args[-1]).write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + struct.pack(">II",2420,1668))
+    size = (1668,2420) if mode in ("portrait-success", "letterboxed-result") else (2420,1668)
+    pathlib.Path(args[-1]).write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + struct.pack(">II",*size))
 elif args[:2] == ["simctl", "spawn"]:
     if mode == "console-failure":
         sys.exit(25)
@@ -123,6 +132,16 @@ class SimulatorScriptTests(unittest.TestCase):
         self.assertNotEqual(run.returncode, 0)
         self.assertIn("wait-for-cancel-dismissal", (evidence / "screen-validation.txt").read_text())
         self.assertFalse(json.loads((evidence / "ios-smoke-result.json").read_text())["passed"])
+
+    def test_portrait_success(self):
+        run, evidence = self.run_script("portrait-success")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn('"orientation": "portrait"', (evidence / "screen-validation.txt").read_text())
+
+    def test_old_letterboxing_is_still_rejected(self):
+        run, evidence = self.run_script("letterboxed-result")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("Screenshot and drawable sizes differ", (evidence / "screen-validation.txt").read_text())
 
     def test_launch_failure_preserves_exit_code(self):
         run, evidence = self.run_script("launch-failure")

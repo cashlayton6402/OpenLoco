@@ -55,14 +55,22 @@ See [Apple's component installation documentation](https://developer.apple.com/d
 The release presets build `IosBundleAudit` (which depends on `App`) before
 packaging. This stages notices inside the app and checks the resource inventory
 against the source checkout and installed dependency notices. The setup smoke
-check also requires Metal presentation, a landscape UIKit scene filled by both
-the window and setup view, and a raw landscape screenshot whose pixel dimensions
-match the drawable. The setup test waits for an active scene and UIKit's actual
+check also requires Metal presentation, a window and setup view filling the
+screen in its current portrait or landscape orientation, and an unmodified
+screenshot whose pixel dimensions match both the drawable and screen point
+dimensions multiplied by display scale. Merely filling a scene does not prove
+display coverage: iPadOS may scale a restricted scene into a letterboxed area.
+The setup test waits for an active, fully covered display and UIKit's actual
 presentation/dismissal completions before each action. Each stage has a 15-second
 deadline, with a 90-second overall bound after setup initialization.
-The scene manifest uses SDL3's built-in scene delegate; the app requests landscape
-through the public scene geometry API and sets SDL's orientation hint before
-initializing video. Setup view edges follow the root view using constraints.
+The scene manifest uses SDL3's built-in scene delegate. Setup supports all four
+iPad orientations in both the plist and SDL hint, and uses a resizable SDL window.
+It follows the device without requesting a forced scene orientation. Setup view
+edges follow the root; content scrolls within the safe area when space is small.
+This adaptive setup policy is separate from future gameplay orientation.
+See [Apple's resizing guidance](https://developer.apple.com/documentation/technotes/tn3192-migrating-your-app-from-the-deprecated-uirequiresfullscreen-key).
+Normal setup can resize in a smaller window; the canonical simulator smoke
+capture deliberately requires a full-display window to detect letterboxing.
 
 Release iOS compilation includes debug information for the app and engine.
 Packaging requires the adjacent `OpenLoco.app.dSYM`, an exact architecture/UUID
@@ -113,8 +121,13 @@ The transition sequence is shared with portable C++ regression tests. A button
 is dispatched once, then the test waits for its alert's presentation completion;
 the next button waits for dismissal completion and an active scene. It requires
 two completed presentations, two dismissals, three checks and one cancellation.
-Version 2 result JSON records the stage, reason, counts, pending transition and
-scene geometry. Controlled failures keep the app visible for evidence and still
+Version 3 result JSON records stage, reason, counts, pending transition, interface
+orientation, scene geometry, screen bounds/scale and the window frame converted
+to screen coordinates. Native geometry checks share a portable C++ helper with
+regression tests. The external validator independently checks numerical geometry
+and raw PNG dimensions; it accepts either orientation only when coverage matches.
+The old portrait screenshot with a landscape drawable still fails. Controlled
+failures keep the app visible for evidence and still
 fail the external validator; ordinary application exit attempts a failed result
 before teardown. Initialization failures before app-state ownership and OS kills
 may provide only console evidence. Progress JSON is written at stage boundaries.

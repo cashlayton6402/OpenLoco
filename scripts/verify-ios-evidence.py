@@ -16,28 +16,38 @@ def require(condition, message):
 
 def verify_smoke(result, screenshot):
     require(result.get("passed") is True, f"App smoke failed: stage={result.get('stage', 'missing')}; reason={result.get('failureReason', 'missing')}")
-    require(result.get("resultVersion") == 2 and result.get("stage") == "complete" and result.get("failureReason") == "", "Missing completed transition evidence")
+    require(result.get("resultVersion") == 3 and result.get("orientationPolicy") == "adaptive-setup", "Missing adaptive display evidence")
+    require(result.get("stage") == "complete" and result.get("failureReason") == "", "Missing completed transition evidence")
     require(result.get("dialogsDismissed") == 2 and result.get("presentationPending") is False and result.get("activeDialog") is False, "Dialog transitions did not finish")
     require(result.get("gameplayStarted") is False, "Unexpected gameplay startup")
     require(result.get("frames", 0) > 1, "No sustained presentation")
     require((result.get("checks"), result.get("cancellations"), result.get("dialogsPresented")) == (3, 1, 2), "Setup actions failed")
     require(result.get("metalRenderer") is True, "Metal renderer missing")
-    require(result.get("landscapeFillsScene") is True, "Landscape scene coverage missing")
+    require(result.get("setupFillsScene") is True and result.get("windowFillsScreen") is True and result.get("drawableMatchesScreen") is True, "Full display coverage missing")
     sizes = []
-    for prefix in ("scene", "window", "setup"):
+    for prefix in ("scene", "window", "setup", "screen", "windowScreen"):
         size = tuple(result.get(prefix + axis, 0) for axis in ("Width", "Height"))
-        require(all(isinstance(x, (int, float)) and math.isfinite(x) and x > 0 for x in size), "Invalid UIKit geometry")
-        require(size[0] > size[1], "UIKit surface is not landscape")
+        require(all(type(x) in (int, float) and math.isfinite(x) and x > 0 for x in size), "Invalid UIKit geometry")
         sizes.append(size)
-    require(all(abs(size[i] - sizes[0][i]) < 1 for size in sizes for i in (0, 1)), "UIKit surfaces do not fill the scene")
+    require(all(abs(size[i] - sizes[0][i]) < 1 for size in sizes for i in (0, 1)), "UIKit surfaces do not fill the screen")
+    for axis in ("X", "Y"):
+        position = (result.get("screen" + axis), result.get("windowScreen" + axis))
+        require(all(type(x) in (int, float) and math.isfinite(x) for x in position), "Invalid screen position")
+        require(abs(position[0] - position[1]) < 1, "Window is offset within the screen")
+    scale = result.get("screenScale")
+    require(type(scale) in (int, float) and math.isfinite(scale) and scale > 0, "Invalid display scale")
+    orientation = result.get("interfaceOrientation")
+    require(type(orientation) is int and orientation in (1, 2, 3, 4), "Unknown interface orientation")
+    landscape = orientation in (3, 4)
+    require((sizes[0][0] >= sizes[0][1]) if landscape else (sizes[0][1] >= sizes[0][0]), "Interface orientation and scene aspect differ")
     with Path(screenshot).open("rb") as stream:
         header = stream.read(24)
     require(len(header) == 24 and header[:16] == b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR", "Invalid PNG screenshot header")
     pixels = struct.unpack(">II", header[16:24])
-    require(pixels[0] > pixels[1] > 0, "Simulator screenshot is not landscape")
+    require(pixels[0] > 0 and pixels[1] > 0, "Empty simulator screenshot")
     require(pixels == (result.get("pixelWidth"), result.get("pixelHeight")), "Screenshot and drawable sizes differ")
-    require(abs(pixels[0] / sizes[0][0] - pixels[1] / sizes[0][1]) < 0.01, "Drawable is stretched relative to the scene")
-    return {"screenshotWidth": pixels[0], "screenshotHeight": pixels[1], "landscapeFillsScene": True}
+    require(all(abs(pixels[i] - sizes[0][i] * scale) < 1 for i in (0, 1)), "Screenshot, screen scale and scene dimensions differ")
+    return {"screenshotWidth": pixels[0], "screenshotHeight": pixels[1], "orientation": "landscape" if landscape else "portrait", "windowFillsScreen": True}
 
 
 def parse_uuids(text):

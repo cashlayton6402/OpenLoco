@@ -22,11 +22,15 @@ class EvidenceTests(unittest.TestCase):
         self.screenshot = self.root / "screen.png"
         # Only a PNG header: fixture for metadata validation, not a rendered image.
         self.png_size(2420, 1668)
-        self.result = dict(resultVersion=2, stage="complete", failureReason="",
+        self.result = dict(resultVersion=3, orientationPolicy="adaptive-setup", interfaceOrientation=3,
+                           stage="complete", failureReason="",
                            dialogsDismissed=2, presentationPending=False, activeDialog=False,
                            passed=True, gameplayStarted=False, frames=151, checks=3,
                            cancellations=1, dialogsPresented=2, metalRenderer=True,
-                           landscapeFillsScene=True, pixelWidth=2420, pixelHeight=1668,
+                           setupFillsScene=True, windowFillsScreen=True, drawableMatchesScreen=True,
+                           screenX=0, screenY=0, windowScreenX=0, windowScreenY=0, screenScale=2,
+                           screenWidth=1210, screenHeight=834, windowScreenWidth=1210, windowScreenHeight=834,
+                           pixelWidth=2420, pixelHeight=1668,
                            sceneWidth=1210, sceneHeight=834, windowWidth=1210,
                            windowHeight=834, setupWidth=1210, setupHeight=834)
         self.app = self.root / "OpenLoco.app"
@@ -51,15 +55,15 @@ class EvidenceTests(unittest.TestCase):
     def test_landscape_full_scene(self):
         self.assertEqual(self.smoke()["screenshotWidth"], 2420)
 
-    def test_previous_portrait_screenshot(self):
+    def test_old_landscape_drawable_with_portrait_screenshot(self):
         self.png_size(1668, 2420)
-        with self.assertRaisesRegex(ValueError, "not landscape"):
+        with self.assertRaisesRegex(ValueError, "drawable sizes differ"):
             self.smoke()
 
     def test_geometry_failures(self):
         for key, value in (("windowWidth", 1024), ("setupHeight", 600),
                            ("sceneWidth", 600), ("windowWidth", float("nan")),
-                           ("landscapeFillsScene", False), ("pixelWidth", 2048),
+                           ("setupFillsScene", False), ("pixelWidth", 2048),
                            ("checks", 2), ("metalRenderer", False), ("passed", False)):
             with self.subTest(key=key, value=value):
                 original = copy.deepcopy(self.result)
@@ -69,7 +73,7 @@ class EvidenceTests(unittest.TestCase):
                 self.result = original
 
     def test_missing_geometry(self):
-        del self.result["landscapeFillsScene"]
+        del self.result["setupFillsScene"]
         with self.assertRaises(ValueError):
             self.smoke()
 
@@ -92,7 +96,7 @@ class EvidenceTests(unittest.TestCase):
     def test_stretched_drawable(self):
         self.result["pixelWidth"] = 2400
         self.png_size(2400, 1668)
-        with self.assertRaisesRegex(ValueError, "stretched"):
+        with self.assertRaisesRegex(ValueError, "screen scale"):
             self.smoke()
 
     def test_bad_png(self):
@@ -130,13 +134,39 @@ class EvidenceTests(unittest.TestCase):
     def test_scene_manifest_and_orientation(self):
         # Plist substitutions are all textual; validate the actual template's XML.
         info = plistlib.loads((ROOT / "distribution/ios/Info.plist.in").read_bytes())
-        expected = ["UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"]
+        expected = ["UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight", "UIInterfaceOrientationPortrait", "UIInterfaceOrientationPortraitUpsideDown"]
         self.assertEqual(info["UISupportedInterfaceOrientations"], expected)
         self.assertEqual(info["UISupportedInterfaceOrientations~ipad"], expected)
         manifest = info["UIApplicationSceneManifest"]
         self.assertFalse(manifest["UIApplicationSupportsMultipleScenes"])
         scene = manifest["UISceneConfigurations"]["UIWindowSceneSessionRoleApplication"][0]
         self.assertEqual(scene["UISceneDelegateClassName"], "SDLUIKitSceneDelegate")
+        self.assertNotIn("UIRequiresFullScreen", info)
+
+    def test_both_portrait_and_landscape_variants(self):
+        for orientation in (1, 2, 3, 4):
+            with self.subTest(orientation=orientation):
+                width, height = (834, 1210) if orientation in (1, 2) else (1210, 834)
+                for prefix in ("scene", "window", "setup", "screen", "windowScreen"):
+                    self.result[prefix + "Width"] = width
+                    self.result[prefix + "Height"] = height
+                self.result.update(interfaceOrientation=orientation, pixelWidth=width*2, pixelHeight=height*2)
+                self.png_size(width*2, height*2)
+                self.assertTrue(self.smoke()["windowFillsScreen"])
+
+    def test_display_mismatch_rejected_even_when_native_booleans_claim_success(self):
+        for changes in ({"screenWidth": 834, "screenHeight": 1210},
+                        {"windowScreenY": 317.5}, {"windowScreenHeight": 575},
+                        {"screenScale": 1}, {"screenScale": float("nan")},
+                        {"screenScale": True}, {"interfaceOrientation": 0},
+                        {"interfaceOrientation": 1}, {"windowFillsScreen": False},
+                        {"drawableMatchesScreen": False}):
+            with self.subTest(changes=changes):
+                original = self.result.copy()
+                self.result.update(changes)
+                with self.assertRaises(ValueError):
+                    self.smoke()
+                self.result = original
 
 
 if __name__ == "__main__":
