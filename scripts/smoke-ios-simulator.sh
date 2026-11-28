@@ -11,6 +11,13 @@ rm -f -- "$evidence/ios-smoke-result.json" "$evidence/ios-smoke-progress.json" \
     "$evidence/setup-screen.png" "$evidence/simulator-console.txt" \
     "$evidence/screen-validation.json" "$evidence/screen-validation.txt" \
     "$evidence/simulator-environment.txt" "$evidence/simulator-launch.txt" "$evidence/simulator-phases.txt"
+# Only named probe outputs are owned by this script; preserve other build evidence.
+mkdir -p "$evidence/layout"
+for name in landscape-left landscape-right portrait-return resize-wide resize-compact restore-full; do
+    rm -f -- "$evidence/layout/$name.json" "$evidence/layout/$name.png"
+done
+rm -f -- "$evidence/layout/summary.json" "$evidence/layout/completion.json" \
+    "$evidence/ios-layout-progress.json" "$evidence/ios-layout-complete.json"
 app="$(cat "$evidence/app-path.txt")"
 xcrun lipo "$app/OpenLoco" -verify_arch "$ios_arch"
 bundle_id="$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["CFBundleIdentifier"])' "$app/Info.plist")"
@@ -34,7 +41,7 @@ cleanup() {
     phase "cleanup-exit-$status"
     # Collect before terminating, including on launch/poll/validation failures.
     if [[ -n "$container" ]]; then
-        for name in ios-smoke-result.json ios-smoke-progress.json; do
+        for name in ios-smoke-result.json ios-smoke-progress.json ios-layout-progress.json ios-layout-complete.json; do
             smoke_source="$container/Library/Application Support/OpenLoco/$name"
             [[ ! -f "$smoke_source" ]] || cp "$smoke_source" "$evidence/$name"
         done
@@ -55,7 +62,7 @@ xcrun simctl ui "$device" appearance dark
 phase install
 xcrun simctl install "$device" "$app"
 phase launch
-xcrun simctl launch "$device" "$bundle_id" --smoke-test | tee "$evidence/simulator-launch.txt"
+xcrun simctl launch "$device" "$bundle_id" --smoke-test --layout-test | tee "$evidence/simulator-launch.txt"
 phase locate-container
 container="$(xcrun simctl get_app_container "$device" "$bundle_id" data)"
 result="$container/Library/Application Support/OpenLoco/ios-smoke-result.json"
@@ -76,3 +83,5 @@ xcrun simctl io "$device" screenshot "$evidence/setup-screen.png"
 phase validate
 python3 "$root/scripts/verify-ios-evidence.py" smoke "$evidence/ios-smoke-result.json" \
     "$evidence/setup-screen.png" 2>&1 | tee "$evidence/screen-validation.txt"
+phase rotation-and-window-frame-checks
+python3 "$root/scripts/check-ios-layout.py" "$device" "$container" "$evidence"

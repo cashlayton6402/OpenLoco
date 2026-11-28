@@ -1,3 +1,4 @@
+#include "IosLayoutChecks.h"
 #include "IosSetupSmoke.h"
 #include "IosViewGeometry.h"
 #include <OpenLoco/Platform/Platform.h>
@@ -5,10 +6,13 @@
 #include <SDL3/SDL.h>
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
+#include <TargetConditionals.h>
 #import <UIKit/UIKit.h>
+#include <dispatch/dispatch.h>
 #include <exception>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string_view>
 
 @interface OpenLocoSetupController : UIViewController
@@ -20,6 +24,11 @@
 @property (nonatomic) BOOL dialogTransitionPending;
 @property (nonatomic) NSUInteger dialogsPresented;
 @property (nonatomic) NSUInteger dialogsDismissed;
+@property (nonatomic, strong) UIScrollView* setupScroll;
+#if TARGET_OS_SIMULATOR
+@property (nonatomic, copy) NSString* layoutRequestStep;
+@property (nonatomic, copy) NSString* layoutRequestError;
+#endif
 - (void)checkGameData;
 - (void)cancelCheck;
 - (void)retryCheck;
@@ -33,6 +42,7 @@
     self.view.backgroundColor = [UIColor colorWithRed:0.07 green:0.10 blue:0.14 alpha:1.0];
 
     UIScrollView* scroll = [UIScrollView new];
+    self.setupScroll = scroll;
     scroll.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:scroll];
@@ -193,6 +203,12 @@ namespace
         bool smokeResultWritten = false;
         bool smokeTest = false;
         bool background = false;
+        bool layoutTest = false;
+        NSString* layoutSession = nil;
+#if TARGET_OS_SIMULATOR
+        OpenLoco::Ios::LayoutChecks layout;
+        uint64_t layoutRequestFrame = 0;
+#endif
     };
 
     OpenLoco::Ios::ViewGeometry readViewGeometry(const AppState& app)
@@ -221,7 +237,7 @@ namespace
         return geometry;
     }
 
-    bool writeSmokeResult(AppState& app, bool final = true)
+    std::string smokeJson(AppState& app, bool final)
     {
         const auto* rendererName = app.renderer != nullptr ? SDL_GetRendererName(app.renderer) : nullptr;
         const bool metal = rendererName != nullptr && std::string_view(rendererName) == "metal";
@@ -245,11 +261,9 @@ namespace
                 app.smoke.fail("final-verification-failed");
             }
         }
-        const auto path = OpenLoco::Platform::getUserDirectory() / (final ? "ios-smoke-result.json" : "ios-smoke-progress.json");
-        auto stagingPath = path;
-        stagingPath += ".tmp";
-        std::ofstream result(stagingPath);
+        std::ostringstream result;
         result << "{\"resultVersion\":3,\"passed\":" << (passed ? "true" : "false")
+               << ",\"layoutSession\":\"" << (app.layoutSession != nil ? app.layoutSession.UTF8String : "") << "\""
                << ",\"orientationPolicy\":\"adaptive-setup\""
                << ",\"interfaceOrientation\":" << static_cast<int>(orientation)
                << ",\"stage\":\"" << app.smoke.stageName() << "\""
@@ -268,6 +282,9 @@ namespace
                << ",\"setupFillsScene\":" << (geometry.fillsScene() ? "true" : "false")
                << ",\"windowFillsScreen\":" << (geometry.fillsScreen() ? "true" : "false")
                << ",\"drawableMatchesScreen\":" << (geometry.drawableMatchesScreen() ? "true" : "false")
+               << ",\"setupFillsWindow\":" << (geometry.setupFillsWindow() ? "true" : "false")
+               << ",\"windowFitsScreen\":" << (geometry.windowFitsScreen() ? "true" : "false")
+               << ",\"drawableMatchesWindow\":" << (geometry.drawableMatchesWindow() ? "true" : "false")
                << ",\"sceneWidth\":" << geometry.scene.width << ",\"sceneHeight\":" << geometry.scene.height
                << ",\"windowWidth\":" << geometry.windowBounds.width << ",\"windowHeight\":" << geometry.windowBounds.height
                << ",\"setupWidth\":" << geometry.setupInWindow.width << ",\"setupHeight\":" << geometry.setupInWindow.height
@@ -277,6 +294,16 @@ namespace
                << ",\"windowScreenWidth\":" << geometry.windowInScreen.width << ",\"windowScreenHeight\":" << geometry.windowInScreen.height
                << ",\"screenScale\":" << geometry.scale
                << ",\"gameplayStarted\":false}\n";
+        return result.str();
+    }
+
+    bool writeSmokeResult(AppState& app, bool final = true)
+    {
+        const auto path = OpenLoco::Platform::getUserDirectory() / (final ? "ios-smoke-result.json" : "ios-smoke-progress.json");
+        auto stagingPath = path;
+        stagingPath += ".tmp";
+        std::ofstream result(stagingPath);
+        result << smokeJson(app, final);
         result.close();
         if (!result.good())
         {
@@ -292,6 +319,159 @@ namespace
         app.smokeResultWritten |= final && !error;
         return !error;
     }
+
+#if TARGET_OS_SIMULATOR
+    NSString* layoutPath(NSString* name)
+    {
+        const auto path = OpenLoco::Platform::getUserDirectory() / name.UTF8String;
+        return [NSString stringWithUTF8String:path.string().c_str()];
+    }
+
+    bool writeLayoutJson(NSDictionary* object, NSString* name)
+    {
+        NSError* error = nil;
+        NSData* data = [NSJSONSerialization dataWithJSONObject:object options:NSJSONWritingPrettyPrinted error:&error];
+        if (data == nil || ![data writeToFile:layoutPath(name) options:NSDataWritingAtomic error:&error])
+        {
+            SDL_Log("Layout evidence write failed: %s", error != nil ? error.localizedDescription.UTF8String : "unknown error");
+            return false;
+        }
+        return true;
+    }
+
+    bool layoutAcknowledged(const AppState& app)
+    {
+        NSData* data = [NSData dataWithContentsOfFile:layoutPath(@"ios-layout-ack.json")];
+        id ack = data != nil ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nullptr] : nil;
+        const int index = app.layout.index();
+        NSString* step = index < 0 ? @"setup" : [NSString stringWithUTF8String:OpenLoco::Ios::kLayoutSteps[index].name];
+        return [ack isKindOfClass:NSDictionary.class] && [ack[@"session"] isEqual:app.layoutSession] && [ack[@"step"] isEqual:step];
+    }
+
+    bool layoutButtonVisible(const AppState& app)
+    {
+        UIScrollView* scroll = app.setup.setupScroll;
+        UIButton* button = app.setup.checkButton;
+        return button.window != nil && button.enabled && !button.hidden && button.alpha > 0.95
+            && CGRectContainsRect(CGRectInset(scroll.bounds, -0.5, -0.5), [button convertRect:button.bounds toView:scroll]);
+    }
+
+    bool tickLayoutChecks(AppState& app)
+    {
+        using Checks = OpenLoco::Ios::LayoutChecks;
+        if (app.layout.done() || app.layout.failed())
+        {
+            return true;
+        }
+        const int index = app.layout.index();
+        UIWindow* window = app.setup.view.window;
+        UIWindowScene* scene = window.windowScene;
+        const auto geometry = readViewGeometry(app);
+        bool ready = false;
+        if (index >= 0)
+        {
+            const auto& step = OpenLoco::Ios::kLayoutSteps[index];
+            if (step.width > 0)
+            {
+                UIScrollView* scroll = app.setup.setupScroll;
+                [scroll scrollRectToVisible:[app.setup.checkButton convertRect:app.setup.checkButton.bounds toView:scroll] animated:NO];
+                ready = geometry.windowFitsScreen() && geometry.drawableMatchesWindow()
+                    && std::abs(geometry.windowBounds.width - step.width) < 1 && std::abs(geometry.windowBounds.height - step.height) < 1;
+            }
+            else
+            {
+                ready = geometry.fillsScreen() && geometry.drawableMatchesScreen();
+            }
+            ready = ready && scene.activationState == UISceneActivationStateForegroundActive
+                && static_cast<int>(scene.effectiveGeometry.interfaceOrientation) == step.orientation
+                && window.rootViewController.transitionCoordinator == nil && layoutButtonVisible(app)
+                && app.frames - app.layoutRequestFrame >= 2;
+        }
+        const auto action = app.layout.update(SDL_GetTicks(), layoutAcknowledged(app), ready, app.setup.layoutRequestError != nil);
+        if (action == Checks::Action::begin)
+        {
+            const auto& step = OpenLoco::Ios::kLayoutSteps[app.layout.index()];
+            app.layoutRequestFrame = app.frames;
+            app.setup.layoutRequestError = nil;
+            app.setup.layoutRequestStep = [NSString stringWithUTF8String:step.name];
+            [app.setup.setupScroll setContentOffset:CGPointZero animated:NO];
+            if (step.width > 0 || step.restoreWindow)
+            {
+                window.frame = step.width > 0 ? CGRectMake(32, 64, step.width, step.height) : scene.coordinateSpace.bounds;
+                [window setNeedsLayout];
+                [window layoutIfNeeded];
+            }
+            else
+            {
+                [window.rootViewController setNeedsUpdateOfSupportedInterfaceOrientations];
+                const auto mask = static_cast<UIInterfaceOrientationMask>(1u << step.orientation);
+                UIWindowSceneGeometryPreferencesIOS* preference = [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
+                __weak OpenLocoSetupController* weakSetup = app.setup;
+                NSString* requestStep = app.setup.layoutRequestStep;
+                [scene requestGeometryUpdateWithPreferences:preference
+                                               errorHandler:^(NSError* error) {
+                                                   dispatch_async(dispatch_get_main_queue(), ^{
+                                                       OpenLocoSetupController* setup = weakSetup;
+                                                       if ([setup.layoutRequestStep isEqual:requestStep])
+                                                       {
+                                                           setup.layoutRequestError = error.localizedDescription;
+                                                       }
+                                                   });
+                                               }];
+            }
+            SDL_Log("Layout request: %s", step.name);
+        }
+        if (action == Checks::Action::complete)
+        {
+            return writeLayoutJson(@{@"layoutVersion" : @1,
+                                     @"passed" : @YES,
+                                     @"session" : app.layoutSession,
+                                     @"stepsCompleted" : @(OpenLoco::Ios::kLayoutSteps.size())},
+                                   @"ios-layout-complete.json");
+        }
+        if (action == Checks::Action::begin || action == Checks::Action::capture || action == Checks::Action::failure)
+        {
+            const auto& step = OpenLoco::Ios::kLayoutSteps[app.layout.index()];
+            const auto text = smokeJson(app, false);
+            NSData* data = [NSData dataWithBytes:text.data() length:text.size()];
+            NSMutableDictionary* snapshot = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:nullptr];
+            if (snapshot == nil)
+            {
+                SDL_Log("Layout snapshot serialization failed: %s", step.name);
+                return false;
+            }
+            snapshot[@"layoutVersion"] = @1;
+            snapshot[@"session"] = app.layoutSession;
+            snapshot[@"layoutStep"] = [NSString stringWithUTF8String:step.name];
+            snapshot[@"operation"] = step.width > 0 ? @"window-frame-resize" : step.restoreWindow ? @"window-frame-restore"
+                                                                                                  : @"scene-orientation";
+            snapshot[@"passed"] = @(action == Checks::Action::capture);
+            snapshot[@"failureReason"] = [NSString stringWithUTF8String:app.layout.reason()];
+            snapshot[@"geometryError"] = app.setup.layoutRequestError ?: @"";
+            snapshot[@"requestedOrientation"] = @(step.orientation);
+            snapshot[@"requestedWidth"] = @(step.width);
+            snapshot[@"requestedHeight"] = @(step.height);
+            snapshot[@"requestFrames"] = @(app.layoutRequestFrame);
+            snapshot[@"framesAfterRequest"] = @(app.frames - app.layoutRequestFrame);
+            snapshot[@"stableFrames"] = @(app.layout.stableFrames());
+            snapshot[@"buttonVisible"] = @(layoutButtonVisible(app));
+            snapshot[@"buttonWidth"] = @(app.setup.checkButton.bounds.size.width);
+            snapshot[@"buttonHeight"] = @(app.setup.checkButton.bounds.size.height);
+            snapshot[@"scrollHeight"] = @(app.setup.setupScroll.bounds.size.height);
+            snapshot[@"contentHeight"] = @(app.setup.setupScroll.contentSize.height);
+            if (!writeLayoutJson(snapshot, @"ios-layout-progress.json"))
+            {
+                return false;
+            }
+            if (action != Checks::Action::begin)
+            {
+                SDL_Log("Layout snapshot: %s; passed=%d; reason=%s", step.name, action == Checks::Action::capture, app.layout.reason());
+                return writeLayoutJson(snapshot, [NSString stringWithFormat:@"ios-layout-%s.json", step.name]);
+            }
+        }
+        return true;
+    }
+#endif
 }
 
 SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
@@ -300,6 +480,16 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
     for (int i = 1; i < argc; ++i)
     {
         app->smokeTest |= std::string_view(argv[i]) == "--smoke-test";
+        if (std::string_view(argv[i]) == "--layout-test")
+        {
+#if TARGET_OS_SIMULATOR
+            app->layoutTest = app->smokeTest = true;
+            app->layoutSession = NSUUID.UUID.UUIDString;
+#else
+            SDL_Log("Layout checks are available only in the simulator.");
+            return SDL_APP_FAILURE;
+#endif
+        }
     }
     try
     {
@@ -380,7 +570,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     auto& app = *static_cast<AppState*>(appstate);
     // Keep the final app/dialog visible until the external checker captures it.
     // A failed JSON result still makes the external checker fail.
-    if (app.smokeTest && app.smokeResultWritten)
+    if (app.smokeTest && app.smokeResultWritten && !app.layoutTest)
     {
         return SDL_APP_CONTINUE;
     }
@@ -406,7 +596,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 
     // Exercise the actual setup action handlers across separate UIKit run-loop turns.
     // This is a smoke check, not a substitute for XCTest taps or real device tests.
-    if (app.smokeTest)
+    if (app.smokeTest && !app.smokeResultWritten)
     {
         using Smoke = OpenLoco::Ios::SetupSmoke;
         UIWindow* window = app.setup.view.window;
@@ -444,6 +634,12 @@ SDL_AppResult SDL_AppIterate(void* appstate)
             SDL_Log("OpenLoco iOS setup smoke check %s.", app.smoke.failed() ? "failed" : "passed");
         }
     }
+#if TARGET_OS_SIMULATOR
+    if (app.layoutTest && app.smokeResultWritten && !app.smoke.failed() && !tickLayoutChecks(app))
+    {
+        return SDL_APP_FAILURE;
+    }
+#endif
     return SDL_APP_CONTINUE;
 }
 

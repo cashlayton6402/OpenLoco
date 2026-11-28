@@ -29,13 +29,15 @@ jobs:
         run: bash scripts/tests/test-ios-build-selection.sh
       - name: Reject mismatched symbols and letterboxed screen evidence
         run: python3 scripts/tests/test-ios-evidence.py
-      - name: Exercise delayed setup-dialog transitions
+      - name: Exercise setup, geometry and layout sequencing
         run: |
           cmake -S scripts/tests/ios-smoke -B "$RUNNER_TEMP/openloco-ios-smoke"
           cmake --build "$RUNNER_TEMP/openloco-ios-smoke"
           ctest --test-dir "$RUNNER_TEMP/openloco-ios-smoke" --output-on-failure
       - name: Verify simulator script failure evidence and exit codes
         run: python3 scripts/tests/test-ios-simulator-script.py
+      - name: Reject incomplete rotation and window resize evidence
+        run: python3 scripts/tests/test-ios-layout.py
 
   build:
     name: Unsigned iOS ${{ matrix.target }} (${{ matrix.architecture }})
@@ -76,7 +78,7 @@ jobs:
           key: ios-${{ runner.arch }}-${{ matrix.architecture }}-${{ matrix.target }}-xcode26.2-ios17-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'distribution/ios/vcpkg.json', 'cmake/triplets/*ios*.cmake') }}
       - name: Compile and inspect unsigned application
         run: bash scripts/build-ios-unsigned.sh "${{ matrix.target }}"
-      - name: Launch setup and exercise cancel/retry in simulator
+      - name: Launch setup, rotate, resize and verify raw screenshots
         if: matrix.target == 'simulator'
         run: bash scripts/smoke-ios-simulator.sh
       - name: Upload unsigned application and dependency notices

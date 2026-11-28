@@ -92,6 +92,7 @@ cmake -S scripts/tests/ios-smoke -B /absolute/disposable/sequence-build
 cmake --build /absolute/disposable/sequence-build --config Release
 ctest --test-dir /absolute/disposable/sequence-build -C Release --output-on-failure
 python3 scripts/tests/test-ios-simulator-script.py
+python3 scripts/tests/test-ios-layout.py
 ```
 
 See [the OpenRCT2 comparison](OPENRCT2-COMPARISON.md) for the pinned references,
@@ -138,6 +139,44 @@ result, screenshot and console before cleanup on success or failure, and preserv
 the original command/validation exit status. Cleanup affects only the simulator
 created by this invocation. Portable script tests use synthetic tools/PNG headers,
 including launch/screenshot failures and a missing result; they do not boot iOS.
+The simulator script also enables `--layout-test` and, after validating the
+initial setup screenshot, runs `scripts/check-ios-layout.py`. This mode is
+simulator-only and absent from normal app startup. Its six mandatory stages are:
+
+| Stage | Required observation |
+| --- | --- |
+| Landscape left | Interface orientation 3, full display coverage, matching raw PNG/drawable |
+| Landscape right | Interface orientation 4, full display coverage, matching raw PNG/drawable |
+| Return to portrait | Interface orientation 1 and full display coverage |
+| Wide window frame | Actual UIWindow becomes 640 x 480 points at 32,64; drawable resizes |
+| Compact window frame | Actual UIWindow becomes 320 x 300 points; content scrolls and the check button is visible |
+| Restore full window | Full portrait display coverage and drawable restored |
+
+Rotation requests use the public scene geometry API only after the initial
+capture and an active scene. Resize probes set the actual UIKit app window's
+frame and observe SDL/Metal output; they do not mock geometry or resize only a
+child view. They **do not** exercise an iPadOS window-manager drag, Stage Manager
+or physical device motion. Those require separate interactive/XCTest coverage.
+
+The app requires three ready rendered observations, holds each geometry until
+the external driver captures an unmodified whole-display PNG and validates its
+JSON, and advances only on an acknowledgement tagged with the current launch's
+UUID. Errors, no-op requests, stale sessions, clipped buttons and missing captures
+fail. Geometry has a 25-second settle deadline; capture acknowledgement is bounded
+at 120 seconds. The driver bounds file waits and screenshot commands at 45 seconds.
+Resized-window checks compare drawable size with the **window** and raw PNG size
+with the **screen**; the initial, rotation and restore checks retain full-display
+requirements. Partial-window screenshots intentionally contain area outside the
+app window; they cannot replace the final restored full-display evidence.
+
+Evidence is kept under `evidence/layout/` (six raw PNGs, per-stage JSON, native
+completion and suite summary), with `ios-layout-progress.json` copied on cleanup.
+The test mode keeps rendering after the initial dialog result instead of freezing
+the renderer. No signing, new dependency, paid runner or private API is needed.
+Local synthetic fixtures validate the protocol and checks, not UIKit behavior.
+See [Apple's scene orientation API](https://developer.apple.com/documentation/uikit/uiwindowscene/requestgeometryupdate(_:errorhandler:))
+and [UIView frame](https://developer.apple.com/documentation/uikit/uiview/frame).
+
 See Apple's [presentation completion](https://developer.apple.com/documentation/uikit/uiviewcontroller/present(_:animated:completion:))
 and [dismissal completion](https://developer.apple.com/documentation/uikit/uiviewcontroller/dismiss(animated:completion:))
 documentation for the readiness signals.

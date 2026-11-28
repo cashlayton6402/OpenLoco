@@ -54,5 +54,23 @@ namespace OpenLoco::Ios
             return validRect(screen) && std::isfinite(scale) && scale > 0 && pixelWidth > 0 && pixelHeight > 0
                 && std::abs(pixelWidth - screen.width * scale) < 1 && std::abs(pixelHeight - screen.height * scale) < 1;
         }
+
+        bool setupFillsWindow() const { return sameRect(setupInWindow, windowBounds); }
+
+        bool windowFitsScreen() const
+        {
+            return setupFillsWindow() && validRect(screen) && validRect(windowInScreen)
+                && windowInScreen.x >= screen.x && windowInScreen.y >= screen.y
+                && windowInScreen.x + windowInScreen.width <= screen.x + screen.width + 0.5
+                && windowInScreen.y + windowInScreen.height <= screen.y + screen.height + 0.5
+                && std::abs(windowBounds.width - windowInScreen.width) < 1
+                && std::abs(windowBounds.height - windowInScreen.height) < 1;
+        }
+
+        bool drawableMatchesWindow() const
+        {
+            return validRect(windowBounds) && std::isfinite(scale) && scale > 0 && pixelWidth > 0 && pixelHeight > 0
+                && std::abs(pixelWidth - windowBounds.width * scale) < 1 && std::abs(pixelHeight - windowBounds.height * scale) < 1;
+        }
     };
 }

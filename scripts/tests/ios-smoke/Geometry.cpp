@@ -58,5 +58,15 @@ int main()
     geometry.screen.width = std::numeric_limits<double>::infinity();
     require(!geometry.fillsScreen() && !geometry.drawableMatchesScreen(), "Reject nonfinite bounds");
     require(!ViewGeometry{}.fillsScene() && !ViewGeometry{}.fillsScreen() && !ViewGeometry{}.drawableMatchesScreen(), "Reject detached views");
+    geometry = fullDisplay(834, 1210);
+    geometry.windowBounds = geometry.setupInWindow = { 0, 0, 640, 480 };
+    geometry.windowInScene = { 32, 64, 640, 480 };
+    geometry.windowInScreen = { 32, 64, 640, 480 };
+    geometry.pixelWidth = 1280;
+    geometry.pixelHeight = 960;
+    require(geometry.setupFillsWindow() && geometry.windowFitsScreen() && geometry.drawableMatchesWindow(), "Actual smaller window layout can pass without filling display");
+    require(!geometry.fillsScreen() && !geometry.drawableMatchesScreen(), "Window-frame probe cannot replace fullscreen evidence");
+    geometry.windowInScreen.x = 400;
+    require(!geometry.windowFitsScreen(), "Reject offscreen smaller window");
     std::cout << "PASS offsets, clipping, drawable/scale mismatch and invalid geometry\nNo UIKit or Apple SDK executed.\n";
 }

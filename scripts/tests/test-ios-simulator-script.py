@@ -15,7 +15,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 BASH = os.environ.get("OPENLOCO_TEST_BASH", "bash")
 MOCK = r'''
-import json, os, pathlib, struct, sys
+import json, os, pathlib, struct, sys, runpy
 args = sys.argv[1:]
 root = pathlib.Path(os.environ["OPENLOCO_MOCK_ROOT"])
 mode = os.environ["OPENLOCO_MOCK_MODE"]
@@ -34,25 +34,16 @@ elif args[:2] == ["simctl", "launch"]:
         sys.exit(23)
     data = root / "container/Library/Application Support/OpenLoco"
     data.mkdir(parents=True, exist_ok=True)
-    result = dict(resultVersion=3,orientationPolicy="adaptive-setup",interfaceOrientation=3,
-                  stage="complete",failureReason="",passed=True,
-                  gameplayStarted=False,frames=50,checks=3,cancellations=1,
-                  dialogsPresented=2,dialogsDismissed=2,presentationPending=False,
-                  activeDialog=False,metalRenderer=True,setupFillsScene=True,
-                  windowFillsScreen=True,drawableMatchesScreen=True,
-                  screenX=0,screenY=0,windowScreenX=0,windowScreenY=0,screenScale=2,
-                  screenWidth=1210,screenHeight=834,windowScreenWidth=1210,windowScreenHeight=834,
-                  pixelWidth=2420,pixelHeight=1668,sceneWidth=1210,sceneHeight=834,
-                  windowWidth=1210,windowHeight=834,setupWidth=1210,setupHeight=834)
-    if mode == "portrait-success":
-        for prefix in ("scene", "window", "setup", "screen", "windowScreen"):
-            result[prefix+"Width"], result[prefix+"Height"] = 834, 1210
-        result.update(interfaceOrientation=1,pixelWidth=1668,pixelHeight=2420)
+    fixtures = runpy.run_path(str(root / "layout-fixtures.py"))
+    result = fixtures["baseline"](portrait=mode == "portrait-success")
     if mode in ("failed-result", "console-failure"):
         result.update(passed=False,stage="wait-for-cancel-dismissal",failureReason="transition-timeout")
     (data / "ios-smoke-progress.json").write_text(json.dumps(result))
     if mode != "missing-result":
         (data / "ios-smoke-result.json").write_text(json.dumps(result))
+    for snapshot in fixtures["snapshots"](result):
+        (data / ("ios-layout-" + snapshot["layoutStep"] + ".json")).write_text(json.dumps(snapshot))
+    (data / "ios-layout-complete.json").write_text(json.dumps(dict(layoutVersion=1,passed=True,session=result["layoutSession"],stepsCompleted=6)))
     print("io.openloco.ios.development: synthetic-pid")
 elif args[:2] == ["simctl", "get_app_container"]:
     print((root / "container").as_posix())
@@ -61,6 +52,8 @@ elif args[:2] == ["simctl", "io"]:
     if mode == "screenshot-failure":
         sys.exit(24)
     size = (1668,2420) if mode in ("portrait-success", "letterboxed-result") else (2420,1668)
+    if pathlib.Path(args[-1]).parent.name == "layout":
+        size = (2420,1668) if pathlib.Path(args[-1]).stem in ("landscape-left", "landscape-right") else (1668,2420)
     pathlib.Path(args[-1]).write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + struct.pack(">II",*size))
 elif args[:2] == ["simctl", "spawn"]:
     if mode == "console-failure":
@@ -79,8 +72,9 @@ class SimulatorScriptTests(unittest.TestCase):
         project = root / "project"
         scripts = project / "scripts"
         scripts.mkdir(parents=True)
-        for name in ("smoke-ios-simulator.sh", "ios-build-common.sh", "verify-ios-evidence.py"):
+        for name in ("smoke-ios-simulator.sh", "ios-build-common.sh", "verify-ios-evidence.py", "check-ios-layout.py"):
             shutil.copyfile(ROOT / "scripts" / name, scripts / name)
+        shutil.copyfile(ROOT / "scripts/tests/ios-layout-fixtures.py", root / "layout-fixtures.py")
         build = project / "build/ios-simulator-intel/evidence"
         build.mkdir(parents=True)
         app = root / "OpenLoco.app"
@@ -93,6 +87,8 @@ class SimulatorScriptTests(unittest.TestCase):
         tools.mkdir()
         python = shlex.quote(Path(sys.executable).as_posix())
         (tools / "mock.py").write_text(MOCK)
+        if os.name == "nt":
+            (tools / "xcrun.cmd").write_text(f'@echo off\n"{sys.executable}" "{tools / "mock.py"}" %*\n')
         wrappers = {
             "python3": f'#!/usr/bin/env bash\nexec {python} "$@"\n',
             "uname": '#!/usr/bin/env bash\ncase "$1" in -s) echo Darwin;; -m) echo x86_64;; *) exit 2;; esac\n',
@@ -109,7 +105,7 @@ class SimulatorScriptTests(unittest.TestCase):
         # seconds for the missing-result scenario. All calls are synthetic.
         command = 'export PATH="$(cd "$1" && pwd):$PATH"; sleep() { SECONDS=$((SECONDS + 180)); }; export -f sleep; source "$0"'
         run = subprocess.run([BASH, "-c", command, (scripts / "smoke-ios-simulator.sh").as_posix(), tools.as_posix()],
-                             env=env, capture_output=True, text=True, timeout=30)
+                             env=env, capture_output=True, text=True, timeout=60)
         self.assertTrue((build / "simulator-environment.txt").is_file(), run.stdout + run.stderr)
         self.assertTrue((build / "simulator-phases.txt").is_file())
         calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
@@ -126,6 +122,7 @@ class SimulatorScriptTests(unittest.TestCase):
         self.assertTrue(json.loads((evidence / "ios-smoke-result.json").read_text())["passed"])
         self.assertTrue((evidence / "ios-smoke-progress.json").is_file())
         self.assertNotEqual((evidence / "setup-screen.png").read_bytes(), b"stale screenshot")
+        self.assertTrue(json.loads((evidence / "layout/summary.json").read_text())["passed"])
 
     def test_failed_result_retains_reason(self):
         run, evidence = self.run_script("failed-result")
