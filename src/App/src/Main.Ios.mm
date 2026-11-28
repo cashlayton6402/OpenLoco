@@ -25,10 +25,6 @@
 @property (nonatomic) NSUInteger dialogsPresented;
 @property (nonatomic) NSUInteger dialogsDismissed;
 @property (nonatomic, strong) UIScrollView* setupScroll;
-#if TARGET_OS_SIMULATOR
-@property (nonatomic, copy) NSString* layoutRequestStep;
-@property (nonatomic, copy) NSString* layoutRequestError;
-#endif
 - (void)checkGameData;
 - (void)cancelCheck;
 - (void)retryCheck;
@@ -364,6 +360,14 @@ namespace
             return true;
         }
         const int index = app.layout.index();
+        if (index < 0)
+        {
+            NSString* marker = [NSString stringWithFormat:@"rotation:%@:setup", app.layoutSession];
+            if (![app.setup.checkButton.accessibilityValue isEqual:marker])
+            {
+                app.setup.checkButton.accessibilityValue = marker;
+            }
+        }
         UIWindow* window = app.setup.view.window;
         UIWindowScene* scene = window.windowScene;
         const auto geometry = readViewGeometry(app);
@@ -384,16 +388,18 @@ namespace
             }
             ready = ready && scene.activationState == UISceneActivationStateForegroundActive
                 && static_cast<int>(scene.effectiveGeometry.interfaceOrientation) == step.orientation
+                && static_cast<int>(UIDevice.currentDevice.orientation) == OpenLoco::Ios::deviceOrientationForInterface(step.orientation)
                 && window.rootViewController.transitionCoordinator == nil && layoutButtonVisible(app)
                 && app.frames - app.layoutRequestFrame >= 2;
         }
-        const auto action = app.layout.update(SDL_GetTicks(), layoutAcknowledged(app), ready, app.setup.layoutRequestError != nil);
+        const auto action = app.layout.update(SDL_GetTicks(), layoutAcknowledged(app), ready, false);
         if (action == Checks::Action::begin)
         {
             const auto& step = OpenLoco::Ios::kLayoutSteps[app.layout.index()];
             app.layoutRequestFrame = app.frames;
-            app.setup.layoutRequestError = nil;
-            app.setup.layoutRequestStep = [NSString stringWithUTF8String:step.name];
+            // XCUITest observes this session-tagged marker and rotates the simulated
+            // device. The app observes geometry; it never forces scene orientation.
+            app.setup.checkButton.accessibilityValue = [NSString stringWithFormat:@"rotation:%@:%s", app.layoutSession, step.name];
             [app.setup.setupScroll setContentOffset:CGPointZero animated:NO];
             if (step.width > 0 || step.restoreWindow)
             {
@@ -401,33 +407,20 @@ namespace
                 [window setNeedsLayout];
                 [window layoutIfNeeded];
             }
-            else
-            {
-                [window.rootViewController setNeedsUpdateOfSupportedInterfaceOrientations];
-                const auto mask = static_cast<UIInterfaceOrientationMask>(1u << step.orientation);
-                UIWindowSceneGeometryPreferencesIOS* preference = [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
-                __weak OpenLocoSetupController* weakSetup = app.setup;
-                NSString* requestStep = app.setup.layoutRequestStep;
-                [scene requestGeometryUpdateWithPreferences:preference
-                                               errorHandler:^(NSError* error) {
-                                                   dispatch_async(dispatch_get_main_queue(), ^{
-                                                       OpenLocoSetupController* setup = weakSetup;
-                                                       if ([setup.layoutRequestStep isEqual:requestStep])
-                                                       {
-                                                           setup.layoutRequestError = error.localizedDescription;
-                                                       }
-                                                   });
-                                               }];
-            }
             SDL_Log("Layout request: %s", step.name);
         }
         if (action == Checks::Action::complete)
         {
-            return writeLayoutJson(@{@"layoutVersion" : @1,
-                                     @"passed" : @YES,
-                                     @"session" : app.layoutSession,
-                                     @"stepsCompleted" : @(OpenLoco::Ios::kLayoutSteps.size())},
-                                   @"ios-layout-complete.json");
+            const bool written = writeLayoutJson(@{@"layoutVersion" : @2,
+                                                   @"passed" : @YES,
+                                                   @"session" : app.layoutSession,
+                                                   @"stepsCompleted" : @(OpenLoco::Ios::kLayoutSteps.size())},
+                                                 @"ios-layout-complete.json");
+            if (written)
+            {
+                app.setup.checkButton.accessibilityValue = [NSString stringWithFormat:@"rotation:%@:complete", app.layoutSession];
+            }
+            return written;
         }
         if (action == Checks::Action::begin || action == Checks::Action::capture || action == Checks::Action::failure)
         {
@@ -440,14 +433,16 @@ namespace
                 SDL_Log("Layout snapshot serialization failed: %s", step.name);
                 return false;
             }
-            snapshot[@"layoutVersion"] = @1;
+            snapshot[@"layoutVersion"] = @2;
             snapshot[@"session"] = app.layoutSession;
             snapshot[@"layoutStep"] = [NSString stringWithUTF8String:step.name];
             snapshot[@"operation"] = step.width > 0 ? @"window-frame-resize" : step.restoreWindow ? @"window-frame-restore"
-                                                                                                  : @"scene-orientation";
+                                                                                                  : @"device-rotation";
+            snapshot[@"rotationDriver"] = @"XCUIDevice.orientation";
+            snapshot[@"deviceOrientation"] = @(UIDevice.currentDevice.orientation);
             snapshot[@"passed"] = @(action == Checks::Action::capture);
             snapshot[@"failureReason"] = [NSString stringWithUTF8String:app.layout.reason()];
-            snapshot[@"geometryError"] = app.setup.layoutRequestError ?: @"";
+            snapshot[@"geometryError"] = @"";
             snapshot[@"requestedOrientation"] = @(step.orientation);
             snapshot[@"requestedWidth"] = @(step.width);
             snapshot[@"requestedHeight"] = @(step.height);
@@ -465,6 +460,10 @@ namespace
             }
             if (action != Checks::Action::begin)
             {
+                if (action == Checks::Action::failure)
+                {
+                    app.setup.checkButton.accessibilityValue = [NSString stringWithFormat:@"rotation:%@:failed", app.layoutSession];
+                }
                 SDL_Log("Layout snapshot: %s; passed=%d; reason=%s", step.name, action == Checks::Action::capture, app.layout.reason());
                 return writeLayoutJson(snapshot, [NSString stringWithFormat:@"ios-layout-%s.json", step.name]);
             }
@@ -485,6 +484,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
 #if TARGET_OS_SIMULATOR
             app->layoutTest = app->smokeTest = true;
             app->layoutSession = NSUUID.UUID.UUIDString;
+            [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
 #else
             SDL_Log("Layout checks are available only in the simulator.");
             return SDL_APP_FAILURE;
@@ -648,6 +648,12 @@ void SDL_AppQuit(void* appstate, SDL_AppResult)
     std::unique_ptr<AppState> app(static_cast<AppState*>(appstate));
     if (app)
     {
+#if TARGET_OS_SIMULATOR
+        if (app->layoutTest)
+        {
+            [UIDevice.currentDevice endGeneratingDeviceOrientationNotifications];
+        }
+#endif
         if (app->smokeTest && !app->smokeResultWritten)
         {
             app->smoke.fail("application-exited-before-smoke-completion");

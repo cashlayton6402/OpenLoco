@@ -25,14 +25,15 @@ def snapshots(initial):
     results = []
     for index, (name, orientation, width, height) in enumerate(PLAN):
         result = baseline(portrait=orientation == 1)
-        result.update(layoutVersion=1, session=initial["layoutSession"], layoutStep=name,
+        result.update(layoutVersion=2, session=initial["layoutSession"], layoutStep=name,
+                      rotationDriver="XCUIDevice.orientation", deviceOrientation={3: 4, 4: 3}.get(orientation, orientation),
                       requestedOrientation=orientation, interfaceOrientation=orientation,
                       requestedWidth=width, requestedHeight=height, stableFrames=3,
                       geometryError="", buttonVisible=True, buttonWidth=256, buttonHeight=48,
                       scrollHeight=(height or result["screenHeight"])-48, contentHeight=600,
                       requestFrames=initial["frames"]+10*index, framesAfterRequest=4,
                       frames=initial["frames"]+10*index+4,
-                      operation="window-frame-resize" if width else "window-frame-restore" if name == "restore-full" else "scene-orientation")
+                      operation="window-frame-resize" if width else "window-frame-restore" if name == "restore-full" else "device-rotation")
         if width:
             for prefix in ("window", "setup", "windowScreen"):
                 result[prefix+"Width"], result[prefix+"Height"] = width, height

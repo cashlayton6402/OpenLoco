@@ -40,7 +40,9 @@ class LayoutTests(unittest.TestCase):
         changes = ({"session": "stale"}, {"layoutStep": "wrong"}, {"interfaceOrientation": 1},
                    {"framesAfterRequest": 0}, {"stableFrames": 2}, {"buttonVisible": False},
                    {"buttonHeight": 10}, {"passed": False}, {"geometryError": "timeout"},
-                   {"requestFrames": 0}, {"frames": 50}, {"checks": 4})
+                   {"requestFrames": 0}, {"frames": 50}, {"checks": 4},
+                   {"deviceOrientation": 3}, {"rotationDriver": "scene-request"},
+                   {"operation": "scene-orientation"}, {"layoutVersion": 1})
         for change in changes:
             with self.subTest(change=change):
                 result = {**self.results[0], **change}
@@ -68,9 +70,10 @@ class LayoutTests(unittest.TestCase):
         folder, evidence = self.root / "container", self.root / "evidence"
         folder.mkdir()
         evidence.mkdir()
+        (evidence / "ui-rotation.log").write_text("OpenLoco rotation ready: " + self.baseline["layoutSession"] + "\n")
         for result in self.results:
             (folder / f"ios-layout-{result['layoutStep']}.json").write_text(json.dumps(result))
-        completion = dict(layoutVersion=1, passed=True, session=self.baseline["layoutSession"], stepsCompleted=6)
+        completion = dict(layoutVersion=2, passed=True, session=self.baseline["layoutSession"], stepsCompleted=6)
         (folder / "ios-layout-complete.json").write_text(json.dumps(completion))
         captured = []
         def capture(device, path):
@@ -91,10 +94,23 @@ class LayoutTests(unittest.TestCase):
         ticks = iter((0, 0.5, 2))
         with self.assertRaises(TimeoutError): DRIVER["wait_json"](self.root / "absent.json", 1, clock=lambda: next(ticks), pause=lambda _: None)
 
+    def test_rotation_driver_must_read_the_current_session_before_setup_ack(self):
+        log = self.root / "ui-rotation.log"
+        session = self.baseline["layoutSession"]
+        log.write_text("timestamp OpenLoco rotation ready: " + session + "\n")
+        DRIVER["wait_driver_ready"](log, session)
+        for text in ("", "OpenLoco rotation ready: stale-session\n",
+                     "OpenLoco rotation ready: " + session + "-wrong\n"):
+            log.write_text(text)
+            ticks = iter((0, 0.5, 181))
+            with self.assertRaises(TimeoutError):
+                DRIVER["wait_driver_ready"](log, session, clock=lambda: next(ticks), pause=lambda _: None)
+
     def test_failed_capture_never_acknowledges_stage(self):
         folder, evidence = self.root / "container", self.root / "evidence"
         folder.mkdir()
         evidence.mkdir()
+        (evidence / "ui-rotation.log").write_text("OpenLoco rotation ready: " + self.baseline["layoutSession"] + "\n")
         (folder / "ios-layout-landscape-left.json").write_text(json.dumps(self.results[0]))
         def failed_capture(device, path):
             raise RuntimeError("synthetic screenshot failure")

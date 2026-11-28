@@ -15,6 +15,9 @@ static void require(bool condition, const char* message)
 
 int main()
 {
+    require(OpenLoco::Ios::deviceOrientationForInterface(3) == 4, "Interface left requires device right");
+    require(OpenLoco::Ios::deviceOrientationForInterface(4) == 3, "Interface right requires device left");
+    require(OpenLoco::Ios::deviceOrientationForInterface(1) == 1, "Portrait constants agree");
     Checks checks;
     require(checks.update(1, false, true, false) == Action::wait, "Initial portrait must be captured before rotation");
     uint64_t now = 10;

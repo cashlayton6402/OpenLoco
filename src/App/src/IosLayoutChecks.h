@@ -6,6 +6,13 @@
 
 namespace OpenLoco::Ios
 {
+    // UIKit's landscape device and interface constants are opposite (3 <-> 4).
+    constexpr int deviceOrientationForInterface(int orientation)
+    {
+        return orientation == 3 ? 4 : orientation == 4 ? 3
+                                                       : orientation;
+    }
+
     struct LayoutStep
     {
         const char* name;
@@ -37,8 +44,8 @@ namespace OpenLoco::Ios
             failure,
             complete
         };
-        static constexpr uint64_t kSettleTimeoutMs = 25000;
-        static constexpr uint64_t kAckTimeoutMs = 120000;
+        static constexpr uint64_t kSettleTimeoutMs = 60000;
+        static constexpr uint64_t kAckTimeoutMs = 180000;
 
         int index() const { return _index; }
         int stableFrames() const { return _stableFrames; }

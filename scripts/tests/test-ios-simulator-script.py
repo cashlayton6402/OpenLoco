@@ -15,13 +15,35 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 BASH = os.environ.get("OPENLOCO_TEST_BASH", "bash")
 MOCK = r'''
-import json, os, pathlib, struct, sys, runpy
+import json, os, pathlib, struct, sys, runpy, time
 args = sys.argv[1:]
 root = pathlib.Path(os.environ["OPENLOCO_MOCK_ROOT"])
 mode = os.environ["OPENLOCO_MOCK_MODE"]
 with (root / "calls.jsonl").open("a") as log:
     log.write(json.dumps(args) + "\n")
-if args[:2] == ["--sdk", "iphonesimulator"]:
+if args[0] == "xcodebuild" and "build-for-testing" in args:
+    if mode == "runner-build-failure": sys.exit(22)
+elif args[0] == "xcodebuild" and "test-without-building" in args:
+    if mode == "launch-failure": sys.exit(23)
+    data = root / "container/Library/Application Support/OpenLoco"
+    data.mkdir(parents=True, exist_ok=True)
+    fixtures = runpy.run_path(str(root / "layout-fixtures.py"))
+    result = fixtures["baseline"](portrait=mode != "letterboxed-result")
+    print("OpenLoco rotation ready: " + result["layoutSession"], flush=True)
+    if mode in ("failed-result", "console-failure"):
+        result.update(passed=False,stage="wait-for-cancel-dismissal",failureReason="transition-timeout")
+    (data / "ios-smoke-progress.json").write_text(json.dumps(result))
+    for snapshot in fixtures["snapshots"](result):
+        if mode == "rotation-denied" and snapshot["layoutStep"] == "landscape-left":
+            snapshot.update(passed=False, failureReason="geometry-settle-timeout", interfaceOrientation=1)
+        (data / ("ios-layout-" + snapshot["layoutStep"] + ".json")).write_text(json.dumps(snapshot))
+    (data / "ios-layout-complete.json").write_text(json.dumps(dict(layoutVersion=2,passed=True,session=result["layoutSession"],stepsCompleted=6)))
+    if mode != "missing-result":
+        (data / "ios-smoke-result.json").write_text(json.dumps(result))
+    else:
+        time.sleep(30)  # Parent's synthetic clock reaches its deadline immediately.
+    if mode == "runner-failure": sys.exit(65)
+elif args[:2] == ["--sdk", "iphonesimulator"]:
     print("26.2")
 elif args[:3] == ["simctl", "list", "runtimes"]:
     print(json.dumps({"runtimes":[{"isAvailable":True,"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-2","version":"26.2","supportedArchitectures":["x86_64"]}]}))
@@ -29,29 +51,13 @@ elif args[:3] == ["simctl", "list", "devicetypes"]:
     print(json.dumps({"devicetypes":[{"productFamily":"iPad","identifier":"com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4"}]}))
 elif args[:2] == ["simctl", "create"]:
     print("synthetic-device-only")
-elif args[:2] == ["simctl", "launch"]:
-    if mode == "launch-failure":
-        sys.exit(23)
-    data = root / "container/Library/Application Support/OpenLoco"
-    data.mkdir(parents=True, exist_ok=True)
-    fixtures = runpy.run_path(str(root / "layout-fixtures.py"))
-    result = fixtures["baseline"](portrait=mode == "portrait-success")
-    if mode in ("failed-result", "console-failure"):
-        result.update(passed=False,stage="wait-for-cancel-dismissal",failureReason="transition-timeout")
-    (data / "ios-smoke-progress.json").write_text(json.dumps(result))
-    if mode != "missing-result":
-        (data / "ios-smoke-result.json").write_text(json.dumps(result))
-    for snapshot in fixtures["snapshots"](result):
-        (data / ("ios-layout-" + snapshot["layoutStep"] + ".json")).write_text(json.dumps(snapshot))
-    (data / "ios-layout-complete.json").write_text(json.dumps(dict(layoutVersion=1,passed=True,session=result["layoutSession"],stepsCompleted=6)))
-    print("io.openloco.ios.development: synthetic-pid")
 elif args[:2] == ["simctl", "get_app_container"]:
     print((root / "container").as_posix())
 elif args[:2] == ["simctl", "io"]:
     # PNG metadata fixture only, not a screenshot of a running application.
     if mode == "screenshot-failure":
         sys.exit(24)
-    size = (1668,2420) if mode in ("portrait-success", "letterboxed-result") else (2420,1668)
+    size = (1668,2420)
     if pathlib.Path(args[-1]).parent.name == "layout":
         size = (2420,1668) if pathlib.Path(args[-1]).stem in ("landscape-left", "landscape-right") else (1668,2420)
     pathlib.Path(args[-1]).write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + struct.pack(">II",*size))
@@ -75,6 +81,7 @@ class SimulatorScriptTests(unittest.TestCase):
         for name in ("smoke-ios-simulator.sh", "ios-build-common.sh", "verify-ios-evidence.py", "check-ios-layout.py"):
             shutil.copyfile(ROOT / "scripts" / name, scripts / name)
         shutil.copyfile(ROOT / "scripts/tests/ios-layout-fixtures.py", root / "layout-fixtures.py")
+        shutil.copytree(ROOT / "scripts/tests/ios-rotation", scripts / "tests/ios-rotation")
         build = project / "build/ios-simulator-intel/evidence"
         build.mkdir(parents=True)
         app = root / "OpenLoco.app"
@@ -93,6 +100,7 @@ class SimulatorScriptTests(unittest.TestCase):
             "python3": f'#!/usr/bin/env bash\nexec {python} "$@"\n',
             "uname": '#!/usr/bin/env bash\ncase "$1" in -s) echo Darwin;; -m) echo x86_64;; *) exit 2;; esac\n',
             "xcrun": f'#!/usr/bin/env bash\nexec {python} {shlex.quote((tools / "mock.py").as_posix())} "$@"\n',
+            "xcodebuild": f'#!/usr/bin/env bash\nexec {python} {shlex.quote((tools / "mock.py").as_posix())} xcodebuild "$@"\n',
         }
         for name, text in wrappers.items():
             path = tools / name
@@ -101,11 +109,13 @@ class SimulatorScriptTests(unittest.TestCase):
         env = os.environ.copy()
         env.update(OPENLOCO_MOCK_ROOT=str(root), OPENLOCO_MOCK_MODE=mode,
                    PATH=str(tools) + os.pathsep + env["PATH"])
-        # Advance the parent shell's elapsed clock instead of waiting 180 real
+        # Advance the parent shell's elapsed clock instead of waiting 300 real
         # seconds for the missing-result scenario. All calls are synthetic.
-        command = 'export PATH="$(cd "$1" && pwd):$PATH"; sleep() { SECONDS=$((SECONDS + 180)); }; export -f sleep; source "$0"'
+        command = 'export PATH="$(cd "$1" && pwd):$PATH"; sleep() { command sleep 0.5; SECONDS=$((SECONDS + 300)); }; export -f sleep; source "$0"'
         run = subprocess.run([BASH, "-c", command, (scripts / "smoke-ios-simulator.sh").as_posix(), tools.as_posix()],
                              env=env, capture_output=True, text=True, timeout=60)
+        if mode == "runner-build-failure":
+            return run, build
         self.assertTrue((build / "simulator-environment.txt").is_file(), run.stdout + run.stderr)
         self.assertTrue((build / "simulator-phases.txt").is_file())
         calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
@@ -114,6 +124,13 @@ class SimulatorScriptTests(unittest.TestCase):
         screen = next(i for i, call in enumerate(calls) if call[:2] == ["simctl", "io"])
         terminate = next(i for i, call in enumerate(calls) if call[:2] == ["simctl", "terminate"])
         self.assertLess(screen, terminate)
+        self.assertFalse(any(call[:2] == ["simctl", "launch"] for call in calls), "Only XCUITest may launch the app")
+        for call in (call for call in calls if call[0] == "xcodebuild"):
+            self.assertIn("CODE_SIGNING_ALLOWED=NO", call)
+            self.assertIn("CODE_SIGNING_REQUIRED=NO", call)
+            self.assertIn("CODE_SIGN_IDENTITY=", call)
+            self.assertIn("iphonesimulator", call)
+            self.assertNotIn("-allowProvisioningUpdates", call)
         return run, build
 
     def test_success(self):
@@ -123,6 +140,27 @@ class SimulatorScriptTests(unittest.TestCase):
         self.assertTrue((evidence / "ios-smoke-progress.json").is_file())
         self.assertNotEqual((evidence / "setup-screen.png").read_bytes(), b"stale screenshot")
         self.assertTrue(json.loads((evidence / "layout/summary.json").read_text())["passed"])
+        self.assertEqual((evidence / "ui-rotation-exit-code.txt").read_text().strip(), "0")
+
+    def test_runner_failure_cannot_be_hidden_by_native_success(self):
+        run, evidence = self.run_script("runner-failure")
+        self.assertEqual(run.returncode, 65, run.stdout + run.stderr)
+        self.assertTrue(json.loads((evidence / "layout/summary.json").read_text())["passed"])
+        self.assertEqual((evidence / "ui-rotation-exit-code.txt").read_text().strip(), "65")
+
+    def test_rejected_rotation_stops_before_resize(self):
+        run, evidence = self.run_script("rotation-denied")
+        self.assertNotEqual(run.returncode, 0)
+        summary = json.loads((evidence / "layout/summary.json").read_text())
+        self.assertFalse(summary["passed"])
+        self.assertEqual(summary["steps"], [])
+        self.assertTrue((evidence / "layout/landscape-left.png").is_file())
+        self.assertFalse((evidence / "layout/resize-wide.png").exists())
+
+    def test_runner_build_failure_prevents_simulator_creation(self):
+        run, evidence = self.run_script("runner-build-failure")
+        self.assertEqual(run.returncode, 22, run.stdout + run.stderr)
+        self.assertFalse((evidence / "simulator-environment.txt").exists())
 
     def test_failed_result_retains_reason(self):
         run, evidence = self.run_script("failed-result")
@@ -160,7 +198,7 @@ class SimulatorScriptTests(unittest.TestCase):
         self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
         self.assertFalse((evidence / "ios-smoke-result.json").exists())
         self.assertTrue((evidence / "ios-smoke-progress.json").is_file())
-        self.assertIn("180 seconds", run.stderr)
+        self.assertIn("300 seconds", run.stderr)
 
 
 if __name__ == "__main__":

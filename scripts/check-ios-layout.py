@@ -27,7 +27,10 @@ def number(value):
 
 def verify_snapshot(result, screenshot, expected, session, previous_frames):
     name, orientation, width, height = expected
-    require(result.get("layoutVersion") == 1 and result.get("session") == session, "Stale or invalid layout session")
+    require(result.get("layoutVersion") == 2 and result.get("session") == session, "Stale or invalid layout session")
+    require(result.get("rotationDriver") == "XCUIDevice.orientation", "Missing simulator device-rotation driver")
+    device_orientation = {3: 4, 4: 3}.get(orientation, orientation)
+    require(result.get("deviceOrientation") == device_orientation, "Simulated device did not reach the requested orientation")
     require(result.get("resultVersion") == 3 and result.get("orientationPolicy") == "adaptive-setup"
             and result.get("layoutSession") == session and result.get("stage") == "complete", "Missing setup/session evidence")
     require(result.get("layoutStep") == name, "Wrong layout step")
@@ -45,7 +48,7 @@ def verify_snapshot(result, screenshot, expected, session, previous_frames):
     require((result.get("checks"), result.get("cancellations"), result.get("dialogsPresented"), result.get("dialogsDismissed")) == (3, 1, 2, 2)
             and result.get("presentationPending") is False and result.get("activeDialog") is False, "Layout changed setup action state")
     if not width:
-        require(result.get("operation") == ("window-frame-restore" if name == "restore-full" else "scene-orientation"), "Wrong operation")
+        require(result.get("operation") == ("window-frame-restore" if name == "restore-full" else "device-rotation"), "Wrong operation")
         VERIFY["verify_smoke"](result, screenshot)
     else:
         require(result.get("operation") == "window-frame-resize", "Resize was not a UIWindow-frame probe")
@@ -90,11 +93,21 @@ def write_ack(folder, session, step):
     temporary.replace(folder / "ios-layout-ack.json")
 
 
+def wait_driver_ready(log, session, timeout=180, clock=time.monotonic, pause=time.sleep):
+    deadline = clock() + timeout
+    marker = f"OpenLoco rotation ready: {session}"
+    while clock() < deadline:
+        if log.is_file() and any(line.rstrip().endswith(marker) for line in log.read_text(errors="replace").splitlines()):
+            return
+        pause(0.2)
+    raise TimeoutError("UI rotation driver did not acknowledge this setup session")
+
+
 def capture(device, path):
     try:
         tool = shutil.which("xcrun")
         require(tool is not None, "xcrun screenshot tool not found")
-        subprocess.run([tool, "simctl", "io", device, "screenshot", str(path)], check=True, timeout=45, capture_output=True, text=True)
+        subprocess.run([tool, "simctl", "io", device, "screenshot", str(path)], check=True, timeout=120, capture_output=True, text=True)
     except subprocess.CalledProcessError as error:
         raise RuntimeError(f"Raw screenshot failed: {error.stderr}") from error
 
@@ -103,23 +116,26 @@ def run_suite(device, folder, evidence, baseline, capture_screen=capture, wait=w
     session = baseline.get("layoutSession")
     target = evidence / "layout"
     target.mkdir(parents=True, exist_ok=True)
-    summary = dict(passed=False, session=session, steps=[], resizeScope="actual-UIWindow-frame; not-iPadOS-window-manager-drag")
+    summary = dict(passed=False, session=session, steps=[], rotationDriver="XCUIDevice.orientation",
+                   resizeScope="actual-UIWindow-frame; not-iPadOS-window-manager-drag")
     try:
         require(type(session) is str and str(uuid.UUID(session)).upper() == session.upper(), "Simulator layout mode/session missing")
+        require(baseline.get("interfaceOrientation") == 1, "Device-rotation suite must start in portrait")
+        wait_driver_ready(evidence / "ui-rotation.log", session)
         write_ack(folder, session, "setup")
         previous_frames = baseline["frames"]
         for expected in STEPS:
             name = expected[0]
-            result = wait(folder / f"ios-layout-{name}.json", 45)
+            result = wait(folder / f"ios-layout-{name}.json", 90)
             (target / f"{name}.json").write_text(json.dumps(result, indent=2))
             screenshot = target / f"{name}.png"
             capture_screen(device, screenshot)  # Capture failures too; never transform the image.
             previous_frames = verify_snapshot(result, screenshot, expected, session, previous_frames)
             summary["steps"].append(dict(name=name, passed=True, frames=previous_frames))
             write_ack(folder, session, name)
-        completion = wait(folder / "ios-layout-complete.json", 45)
+        completion = wait(folder / "ios-layout-complete.json", 90)
         (target / "completion.json").write_text(json.dumps(completion, indent=2))
-        require(completion.get("passed") is True and completion.get("layoutVersion") == 1
+        require(completion.get("passed") is True and completion.get("layoutVersion") == 2
                 and completion.get("session") == session and completion.get("stepsCompleted") == len(STEPS), "Native suite did not acknowledge every capture and restore")
         summary["passed"] = True
     except Exception as error:
